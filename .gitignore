@@ -24,6 +24,7 @@ test_*
 # Output files
 *.xml
 *.txt
+!requirements.txt
 *.json
 barcodes.txt
 output/

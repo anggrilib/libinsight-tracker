@@ -1,0 +1,8 @@
+# requirements.txt for LibInsight API tools
+# Python 3.9+ required
+
+python-dotenv>=1.0.0
+requests>=2.32.4
+pandas>=2.3.0
+selenium>=4.16.0
+webdriver-manager>=4.0.1
