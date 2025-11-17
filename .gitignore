@@ -1,0 +1,40 @@
+# Environment variables
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+env/
+ENV/
+test_*
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output files
+*.xml
+*.txt
+*.json
+barcodes.txt
+output/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local 
+.history/
+*.yaml
