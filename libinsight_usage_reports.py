@@ -22,6 +22,7 @@ import csv
 import json
 import time
 import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -52,8 +53,100 @@ DATASETS = {
         'name': 'JSTOR',
         'abbrev': 'jstor',
         'report_type': 'Title Master Report'
+    },
+    '39017': {
+        'name': 'Alexander Street',
+        'abbrev': 'asp',
+        'report_type': 'Database Master Report'
+    },
+    '37166': {
+        'name': 'Newsbank', 
+        'abbrev': 'newsbank',
+        'report_type': 'Database Master Report'
+    },
+    '38993': {
+        'name': 'Oxford Grove',
+        'abbrev': 'grove',
+        'report_type': 'Title Master Report'
+    },
+    '40156': {
+        'name': 'Bloomsbury',
+        'abbrev': 'bloomsbury',
+        'report_type': 'Title Master Report',
+        # Special note: includes ABC-CLIO platforms (inactive as of Nov 2024)
+        'includes_abc_clio': True
     }
 }
+
+# Argparse Configuration
+def parse_arguments():
+    """
+    Parse command-line arguments for selective report generation.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments with filters
+    """
+    parser = argparse.ArgumentParser(
+        description='Generate LibInsight usage reports for consortium libraries.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate all reports (default)
+  python libinsight_usage_reports.py
+  
+  # Only Berea College, only Oxford Grove, only top 100 reports
+  python libinsight_usage_reports.py --libraries berea --datasets oxford --reports top100
+  
+  # Multiple libraries
+  python libinsight_usage_reports.py --libraries berea,alc,bcky
+  
+  # Only overview reports for all libraries
+  python libinsight_usage_reports.py --reports overview
+  
+Dataset abbreviations: asp, newsbank, bloomsbury, oxford
+        """
+    )
+    
+    parser.add_argument(
+        '--libraries', '-l',
+        type=str,
+        default=None,
+        help='Comma-separated list of library abbreviations to process (e.g., "berea,alc,bcky"). Default: all libraries'
+    )
+    
+    parser.add_argument(
+        '--datasets', '-d',
+        type=str,
+        default=None,
+        help='Comma-separated list of dataset abbreviations to process (e.g., "oxford,asp,newsbank"). Default: all datasets'
+    )
+    
+    parser.add_argument(
+        '--reports', '-r',
+        type=str,
+        choices=['all', 'overview', 'top100'],
+        default='all',
+        help='Type of reports to generate: "all", "overview" (platform summaries), or "top100" (title reports). Default: all'
+    )
+    
+    args = parser.parse_args()
+    
+    # Process the comma-separated lists into sets for easy filtering
+    filters = {
+        'libraries': None,
+        'datasets': None,
+        'reports': args.reports
+    }
+    
+    if args.libraries:
+        # Convert comma-separated string to set of lowercase abbreviations
+        filters['libraries'] = set(lib.strip().lower() for lib in args.libraries.split(','))
+        
+    if args.datasets:
+        # Convert comma-separated string to set of lowercase abbreviations
+        filters['datasets'] = set(ds.strip().lower() for ds in args.datasets.split(','))
+    
+    return filters
 
 # API Configuration
 API_BASE_URL = 'https://acaweb.libinsight.com/v1.0'
@@ -311,52 +404,26 @@ def get_platform_overview(dataset_id, platform_id, access_token):
     
 def get_top_titles(dataset_id, platform_id, access_token, limit=100):
     """
-    Get top titles by usage for a specific platform across all data types and metrics.
+    Get top titles by usage for a specific platform.
     
-    Loops through:
-    - data_type: Database, Journal, Book, Multimedia, Other
-    - metric_type: total_item_investigations, unique_item_investigations, 
-                   unique_title_investigations, total_item_requests, 
-                   unique_item_requests, unique_title_requests, 
-                   searches_regular, searches_federated, searches_automated, 
-                   searches_platform, no_license, limit_exceeded
+    Returns the top titles sorted by total_item_requests for each data type.
     
     Args:
         dataset_id (str): Dataset ID
         platform_id (int): Platform ID
         access_token (str): API access token
-        limit (int): Number of top titles to retrieve per combination (default 100)
+        limit (int): Number of top titles to retrieve per data_type (default 100)
         
     Returns:
-        dict: Dictionary organized by data_type and metric_type with title lists
+        dict: Dictionary organized by data_type with title lists
               Structure: {
-                  'Book': {
-                      'total_item_requests': [...titles...],
-                      'unique_item_requests': [...titles...],
-                      ...
-                  },
-                  'Journal': {...},
+                  'Book': [...titles sorted by total_item_requests...],
+                  'Journal': [...titles...],
                   ...
               }
     """
     # Define all data types to loop through
     data_types = ['Database', 'Journal', 'Book', 'Multimedia', 'Other']
-    
-    # Define all metric types to loop through
-    metric_types = [
-        'total_item_investigations',
-        'unique_item_investigations', 
-        'unique_title_investigations',
-        'total_item_requests',
-        'unique_item_requests',
-        'unique_title_requests',
-        'searches_regular',
-        'searches_federated',
-        'searches_automated',
-        'searches_platform',
-        'no_license',
-        'limit_exceeded'
-    ]
     
     # Storage for all results
     all_results = {}
@@ -368,51 +435,47 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
     
     # Loop through each data type
     for data_type in data_types:
-        all_results[data_type] = {}
+        # Use total_item_requests to sort/rank the titles
+        params = {
+            'from': FISCAL_YEAR['start'],
+            'to': FISCAL_YEAR['end'],
+            'platforms': platform_id,
+            'data_type': data_type,
+            'metric_type': 'total_item_requests',  # This determines the sorting
+            'limit': limit
+        }
         
-        # Loop through each metric type
-        for metric_type in metric_types:
-            # Add query parameters for this specific combination
-            params = {
-                'from': FISCAL_YEAR['start'],
-                'to': FISCAL_YEAR['end'],
-                'platforms': platform_id,
-                'data_type': data_type,
-                'metric_type': metric_type,
-                'limit': limit
-            }
+        try:
+            response = make_api_request(endpoint, access_token, params)
             
-            try:
-                response = make_api_request(endpoint, access_token, params)
+            # Parse the response structure:
+            # {
+            #   "type": "success",
+            #   "payload": {
+            #     "data_type": "Book",
+            #     "metric_type": "total_item_requests",
+            #     "top_use_titles": [ ...array of title objects... ]
+            #   }
+            # }
+            
+            if response and 'payload' in response:
+                payload = response['payload']
+                top_use_titles = payload.get('top_use_titles', [])
                 
-                # Parse the response structure:
-                # {
-                #   "type": "success",
-                #   "payload": {
-                #     "data_type": "Book",
-                #     "metric_type": "total_item_requests",
-                #     "top_use_titles": [ ...array of title objects... ]
-                #   }
-                # }
-                
-                if response and 'payload' in response:
-                    payload = response['payload']
-                    top_use_titles = payload.get('top_use_titles', [])
-                    
-                    if top_use_titles and len(top_use_titles) > 0:
-                        all_results[data_type][metric_type] = top_use_titles
-                        logger.info(f"    {data_type} / {metric_type}: {len(top_use_titles)} titles")
-                    else:
-                        all_results[data_type][metric_type] = []
+                if top_use_titles and len(top_use_titles) > 0:
+                    all_results[data_type] = top_use_titles
+                    logger.info(f"    {data_type}: {len(top_use_titles)} titles")
                 else:
-                    all_results[data_type][metric_type] = []
-                
-                # Small delay to avoid overwhelming API
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.warning(f"    Error for {data_type}/{metric_type}: {e}")
-                all_results[data_type][metric_type] = []
+                    all_results[data_type] = []
+            else:
+                all_results[data_type] = []
+            
+            # Small delay to avoid overwhelming API
+            time.sleep(0.1)
+            
+        except Exception as e:
+            logger.warning(f"    Error for {data_type}: {e}")
+            all_results[data_type] = []
     
     return all_results
 
@@ -431,28 +494,23 @@ def analyze_dataset_data_types(dataset_results):
     for library_abbrev, library_data in dataset_results.items():
         top_titles = library_data.get('top_titles', {})
         
-        for data_type, metrics in top_titles.items():
-            # Check if ANY metric has ANY data for this data_type
-            for metric_type, titles in metrics.items():
-                if titles and len(titles) > 0:
-                    # Check if any title has non-zero usage
-                    for title in titles:
-                        # Check various usage fields
-                        usage_fields = [
-                            'total_item_requests', 'unique_item_requests',
-                            'total_item_investigations', 'unique_item_investigations',
-                            'searches_platform', 'searches_regular'
-                        ]
-                        for field in usage_fields:
-                            if title.get(field, 0) > 0:
-                                data_types_with_usage.add(data_type)
-                                break
-                        if data_type in data_types_with_usage:
+        # top_titles is now just {data_type: [titles]}
+        for data_type, titles in top_titles.items():
+            if titles and len(titles) > 0:
+                # Check if any title has non-zero usage
+                for title in titles:
+                    # Check various usage fields
+                    usage_fields = [
+                        'total_item_requests', 'unique_item_requests',
+                        'total_item_investigations', 'unique_item_investigations',
+                        'searches_platform', 'searches_regular'
+                    ]
+                    for field in usage_fields:
+                        if title.get(field, 0) > 0:
+                            data_types_with_usage.add(data_type)
                             break
-                if data_type in data_types_with_usage:
-                    break
-            if data_type in data_types_with_usage:
-                break
+                    if data_type in data_types_with_usage:
+                        break
     
     return data_types_with_usage
 
@@ -600,11 +658,12 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
     Generate CSV reports for top titles by usage.
     
     Creates separate files for each data_type that has usage in the dataset.
+    Titles are sorted by total_item_requests and displayed once with all metrics.
     
     Args:
         library_info (dict): Library information from platform mappings
         dataset_info (dict): Dataset configuration
-        titles_data (dict): Nested dict of titles organized by data_type and metric_type
+        titles_data (dict): Dict of titles organized by data_type (already sorted)
         valid_data_types (set): Set of data_types that should be reported for this dataset
         output_dir (Path): Output directory (should be library-specific)
         
@@ -618,24 +677,25 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
         if data_type not in titles_data:
             continue
         
-        metrics = titles_data[data_type]
+        titles = titles_data[data_type]
         
         # Create filename: {library_abbrev}_{vendor_abbrev}_{data_type}_top100_{FY}.csv
         filename = f"{library_info['library_abbreviation']}_{dataset_info['abbrev']}_{data_type.lower()}_top100_{FISCAL_YEAR['label']}.csv"
         filepath = output_dir / filename
         
-        # Define columns for top titles report
+        # Define columns for top titles report (matching manual export format)
         columns = [
-            'Metric Type',
             'Rank',
             'Title',
             'Publisher',
             'ISBN',
             'DOI',
-            'Total Item Requests',
-            'Unique Item Requests',
             'Total Item Investigations',
             'Unique Item Investigations',
+            'Unique Title Investigations',
+            'Total Item Requests',
+            'Unique Item Requests',
+            'Unique Title Requests',
             'Searches Platform',
             'Searches Regular',
             'Searches Federated',
@@ -650,44 +710,43 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
                 writer = csv.DictWriter(csvfile, fieldnames=columns)
                 writer.writeheader()
                 
-                # Write titles grouped by metric type
-                for metric_type, titles in metrics.items():
-                    if titles and len(titles) > 0:
-                        # Write each title for this metric
-                        for rank, title in enumerate(titles, start=1):
-                            row = {
-                                'Metric Type': metric_type,
-                                'Rank': rank,
-                                'Title': title.get('title', ''),
-                                'Publisher': title.get('publisher', ''),
-                                'ISBN': title.get('isbn', ''),
-                                'DOI': title.get('doi', ''),
-                                'Total Item Requests': title.get('total_item_requests', 0),
-                                'Unique Item Requests': title.get('unique_item_requests', 0),
-                                'Total Item Investigations': title.get('total_item_investigations', 0),
-                                'Unique Item Investigations': title.get('unique_item_investigations', 0),
-                                'Searches Platform': title.get('searches_platform', 0),
-                                'Searches Regular': title.get('searches_regular', 0),
-                                'Searches Federated': title.get('searches_federated', 0),
-                                'Searches Automated': title.get('searches_automated', 0),
-                                'No License': title.get('no_license', 0),
-                                'Limit Exceeded': title.get('limit_exceeded', 0)
-                            }
-                            writer.writerow(row)
-                
-                # If no data for any metric in this data_type, write a placeholder
-                if all(len(titles) == 0 for titles in metrics.values()):
+                # Write each title once (already sorted by total_item_requests)
+                if titles and len(titles) > 0:
+                    for rank, title in enumerate(titles, start=1):
+                        row = {
+                            'Rank': rank,
+                            'Title': title.get('title', ''),
+                            'Publisher': title.get('publisher', ''),
+                            'ISBN': title.get('isbn', ''),
+                            'DOI': title.get('doi', ''),
+                            'Total Item Investigations': title.get('total_item_investigations', 0),
+                            'Unique Item Investigations': title.get('unique_item_investigations', 0),
+                            'Unique Title Investigations': title.get('unique_title_investigations', 0),
+                            'Total Item Requests': title.get('total_item_requests', 0),
+                            'Unique Item Requests': title.get('unique_item_requests', 0),
+                            'Unique Title Requests': title.get('unique_title_requests', 0),
+                            'Searches Platform': title.get('searches_platform', 0),
+                            'Searches Regular': title.get('searches_regular', 0),
+                            'Searches Federated': title.get('searches_federated', 0),
+                            'Searches Automated': title.get('searches_automated', 0),
+                            'No License': title.get('no_license', 0),
+                            'Limit Exceeded': title.get('limit_exceeded', 0)
+                        }
+                        writer.writerow(row)
+                else:
+                    # No data for this data_type, write a placeholder
                     writer.writerow({
-                        'Metric Type': 'No data',
                         'Rank': 0,
                         'Title': f'No {data_type} titles with usage',
                         'Publisher': '',
                         'ISBN': '',
                         'DOI': '',
-                        'Total Item Requests': 0,
-                        'Unique Item Requests': 0,
                         'Total Item Investigations': 0,
                         'Unique Item Investigations': 0,
+                        'Unique Title Investigations': 0,
+                        'Total Item Requests': 0,
+                        'Unique Item Requests': 0,
+                        'Unique Title Requests': 0,
                         'Searches Platform': 0,
                         'Searches Regular': 0,
                         'Searches Federated': 0,
@@ -730,16 +789,24 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
     columns = [
         'Library',
         'Platform Name',
+        'Searches Platform',
+        'Total Item Investigations',
         'Total Item Requests',
+        'Unique Item Investigations',
         'Unique Item Requests',
+        'Unique Title Investigations',
         'Unique Title Requests'
     ]
     
     try:
         # Calculate totals
-        total_item_requests = sum(p.get('total_item_requests', 0) for p in platform_data)
-        unique_item_requests = sum(p.get('unique_item_requests', 0) for p in platform_data)
-        unique_title_requests = sum(p.get('unique_title_requests', 0) for p in platform_data)
+        searches_platform_total = sum(p.get('searches_platform', 0) for p in platform_data)
+        total_item_investigations_total = sum(p.get('total_item_investigations', 0) for p in platform_data)
+        total_item_requests_total = sum(p.get('total_item_requests', 0) for p in platform_data)
+        unique_item_investigations_total = sum(p.get('unique_item_investigations', 0) for p in platform_data)
+        unique_item_requests_total = sum(p.get('unique_item_requests', 0) for p in platform_data)
+        unique_title_investigations_total = sum(p.get('unique_title_investigations', 0) for p in platform_data)
+        unique_title_requests_total = sum(p.get('unique_title_requests', 0) for p in platform_data)
         
         # Write CSV file
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
@@ -751,8 +818,12 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
                 row = {
                     'Library': data.get('library_name', ''),
                     'Platform Name': data.get('platform_name', ''),
+                    'Searches Platform': data.get('searches_platform', 0),
+                    'Total Item Investigations': data.get('total_item_investigations', 0),
                     'Total Item Requests': data.get('total_item_requests', 0),
+                    'Unique Item Investigations': data.get('unique_item_investigations', 0),
                     'Unique Item Requests': data.get('unique_item_requests', 0),
+                    'Unique Title Investigations': data.get('unique_title_investigations', 0),
                     'Unique Title Requests': data.get('unique_title_requests', 0)
                 }
                 writer.writerow(row)
@@ -761,9 +832,13 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
             total_row = {
                 'Library': 'TOTAL',
                 'Platform Name': 'All Platforms',
-                'Total Item Requests': total_item_requests,
-                'Unique Item Requests': unique_item_requests,
-                'Unique Title Requests': unique_title_requests
+                'Searches Platform': searches_platform_total,
+                'Total Item Investigations': total_item_investigations_total,
+                'Total Item Requests': total_item_requests_total,
+                'Unique Item Investigations': unique_item_investigations_total,
+                'Unique Item Requests': unique_item_requests_total,
+                'Unique Title Investigations': unique_title_investigations_total,
+                'Unique Title Requests': unique_title_requests_total
             }
             writer.writerow(total_row)
         
@@ -778,7 +853,7 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
 # MAIN PROCESSING FUNCTIONS
 # ============================================================================
 
-def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, output_dir):
+def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, output_dir, filters):
     """
     Process a single dataset and generate all required reports.
     
@@ -821,8 +896,17 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
     
     # PHASE 1: Collect data from ALL libraries
     logger.info("\nPHASE 1: Collecting data from all libraries...")
+
+    # Get list of libraries to process
+    libraries_to_process = active_platforms['library_abbreviation'].unique()
     
-    for library_abbrev in active_platforms['library_abbreviation'].unique():
+    # Apply library filter if specified
+    if filters['libraries']:
+        libraries_to_process = [lib for lib in libraries_to_process 
+                               if lib.lower() in filters['libraries']]
+        logger.info(f"Filtering to libraries: {', '.join(libraries_to_process)}")
+    
+    for library_abbrev in libraries_to_process:
         library_platforms = active_platforms[
             active_platforms['library_abbreviation'] == library_abbrev
         ]
@@ -850,8 +934,12 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         }
         
         # Calculate totals for summary
+        searches_platform = 0
+        total_item_investigations = 0
         total_item_requests = 0
+        unique_item_investigations = 0
         unique_item_requests = 0
+        unique_title_investigations = 0
         unique_title_requests = 0
         
         if overview_data:
@@ -859,19 +947,26 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
             # Structure is: { 'Book': {...stats...}, 'Journal': {...stats...} }
             # underscore represents 'data_type' for dictionary keys
             for _, stats in overview_data.items():
+                searches_platform += stats.get('searches_platform', 0)
+                total_item_investigations += stats.get('total_item_investigations', 0)
                 total_item_requests += stats.get('total_item_requests', 0)
+                unique_item_investigations += stats.get('unique_item_investigations', 0)
                 unique_item_requests += stats.get('unique_item_requests', 0)
+                unique_title_investigations += stats.get('unique_title_investigations', 0)
                 unique_title_requests += stats.get('unique_title_requests', 0)
         
         # Add to summary data for consortium report
         platform_summary_data.append({
             'library_name': library_name,
             'platform_name': f"{library_name} - {dataset_info['name']}",
+            'searches_platform': searches_platform,
+            'total_item_investigations': total_item_investigations,
             'total_item_requests': total_item_requests,
+            'unique_item_investigations': unique_item_investigations,
             'unique_item_requests': unique_item_requests,
+            'unique_title_investigations': unique_title_investigations,
             'unique_title_requests': unique_title_requests
-        })
-        
+        })        
         # Add a small delay between libraries
         time.sleep(0.5)
     
@@ -906,23 +1001,25 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         # Create library-specific directory
         library_dir = create_library_directory(output_dir, library_abbrev)
         
-        # Generate platform overview report
-        generate_platform_report(
-            library_info,
-            dataset_info,
-            overview_data,
-            library_dir
-        )
-        
-        # Generate top titles reports (only for valid data_types)
-        if valid_data_types and top_titles_data:
-            generate_top_titles_report(
+        # Generate platform overview report (if requested)
+        if filters['reports'] in ['all', 'overview']:
+            generate_platform_report(
                 library_info,
                 dataset_info,
-                top_titles_data,
-                valid_data_types,
+                overview_data,
                 library_dir
             )
+        
+        # Generate top titles reports (if requested and data available)
+        if filters['reports'] in ['all', 'top100']:
+            if valid_data_types and top_titles_data:
+                generate_top_titles_report(
+                    library_info,
+                    dataset_info,
+                    top_titles_data,
+                    valid_data_types,
+                    library_dir
+                )
         else:
             logger.warning(f"  No valid data types to report for {library_name}")
     
@@ -944,6 +1041,17 @@ def main():
     logger.info(f"Fiscal Year: {FISCAL_YEAR['start']} to {FISCAL_YEAR['end']}")
     logger.info(f"Report Label: FY{FISCAL_YEAR['label']}")
     logger.info("")
+
+    # Parse command-line arguments
+    filters = parse_arguments()
+    
+    # Log active filters
+    if filters['libraries']:
+        logger.info(f"Library filter: {', '.join(sorted(filters['libraries']))}")
+    if filters['datasets']:
+        logger.info(f"Dataset filter: {', '.join(sorted(filters['datasets']))}")
+    logger.info(f"Report types: {filters['reports']}")
+    logger.info("")
     
     # Step 1: Create output directory
     output_dir = create_output_directory()
@@ -956,13 +1064,19 @@ def main():
     
     # Step 4: Process each dataset
     for dataset_id, dataset_info in DATASETS.items():
+        # Apply dataset filter if specified
+        if filters['datasets'] and dataset_info['abbrev'].lower() not in filters['datasets']:
+            logger.info(f"Skipping dataset: {dataset_info['name']} (filtered out)")
+            continue
+            
         try:
             process_dataset(
                 dataset_id,
                 dataset_info,
                 platform_mappings,
                 access_token,
-                output_dir
+                output_dir,
+                filters  # <-- ADD THIS
             )
         except Exception as e:
             logger.error(f"Error processing dataset {dataset_id}: {e}")
