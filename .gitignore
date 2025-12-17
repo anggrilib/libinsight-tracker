@@ -39,3 +39,6 @@ Thumbs.db
 # Local 
 .history/
 *.yaml
+scratch*
+usage_reports/
+libinsight-platforms.csv
