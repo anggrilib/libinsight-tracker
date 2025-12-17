@@ -124,9 +124,9 @@ Dataset abbreviations: asp, newsbank, bloomsbury, oxford
     parser.add_argument(
         '--reports', '-r',
         type=str,
-        choices=['all', 'overview', 'top100'],
+        choices=['all', 'overview', 'top100', 'summary'],
         default='all',
-        help='Type of reports to generate: "all", "overview" (platform summaries), or "top100" (title reports). Default: all'
+        help='Type of reports to generate: "all", "overview" (platform summaries), "top100" (title reports), or "summary" (BCLA consortium summaries only). Default: all'
     )
     
     args = parser.parse_args()
@@ -921,8 +921,11 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         # Get overview data from API
         overview_data = get_platform_overview(dataset_id, platform_id, access_token)
         
-        # Get top titles data from API (comprehensive version)
-        top_titles_data = get_top_titles(dataset_id, platform_id, access_token, limit=100)
+        # Get top titles data from API (skip if only generating summaries)
+        if filters['reports'] != 'summary':
+            top_titles_data = get_top_titles(dataset_id, platform_id, access_token, limit=100)
+        else:
+            top_titles_data = {}  # Empty dict for summary mode        
         
         # Store results for this library
         dataset_library_results[library_abbrev] = {
@@ -970,67 +973,75 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         # Add a small delay between libraries
         time.sleep(0.5)
     
-    # PHASE 2: Analyze which data_types have usage across the dataset
-    logger.info("\nPHASE 2: Analyzing dataset-wide data_types with usage...")
-    
-    # Create a simplified structure for analysis
-    analysis_data = {}
-    for lib_abbrev, lib_data in dataset_library_results.items():
-        analysis_data[lib_abbrev] = {
-            'top_titles': lib_data['top_titles_data']
-        }
-    
-    valid_data_types = analyze_dataset_data_types(analysis_data)
-    
-    if valid_data_types:
-        logger.info(f"Data types with usage in this dataset: {', '.join(sorted(valid_data_types))}")
+    # PHASE 2: Analyze which data_types have usage across the dataset (skip if only summaries)
+    if filters['reports'] != 'summary':
+        logger.info("\nPHASE 2: Analyzing dataset-wide data_types with usage...")
+        
+        # Create a simplified structure for analysis
+        analysis_data = {}
+        for lib_abbrev, lib_data in dataset_library_results.items():
+            analysis_data[lib_abbrev] = {
+                'top_titles': lib_data['top_titles_data']
+            }
+        
+        valid_data_types = analyze_dataset_data_types(analysis_data)
+        
+        if valid_data_types:
+            logger.info(f"Data types with usage in this dataset: {', '.join(sorted(valid_data_types))}")
+        else:
+            logger.warning("No data types with usage found in this dataset")
     else:
-        logger.warning("No data types with usage found in this dataset")
+        logger.info("\nPHASE 2: Skipping data type analysis (summary mode)")
+        valid_data_types = set()  # Empty set for summary mode
     
-    # PHASE 3: Generate reports for each library
-    logger.info("\nPHASE 3: Generating library reports...")
-    
-    for library_abbrev, library_data in dataset_library_results.items():
-        library_info = library_data['library_info']
-        library_name = library_data['library_name']
-        overview_data = library_data['overview_data']
-        top_titles_data = library_data['top_titles_data']
+    # PHASE 3: Generate reports for each library (skip if only generating summaries)
+    if filters['reports'] != 'summary':
+        logger.info("\nPHASE 3: Generating library reports...")
         
-        logger.info(f"\nGenerating reports: {library_name} ({library_abbrev})")
-        
-        # Create library-specific directory
-        library_dir = create_library_directory(output_dir, library_abbrev)
-        
-        # Generate platform overview report (if requested)
-        if filters['reports'] in ['all', 'overview']:
-            generate_platform_report(
-                library_info,
-                dataset_info,
-                overview_data,
-                library_dir
-            )
-        
-        # Generate top titles reports (if requested and data available)
-        if filters['reports'] in ['all', 'top100']:
-            if valid_data_types and top_titles_data:
-                generate_top_titles_report(
+        for library_abbrev, library_data in dataset_library_results.items():
+            library_info = library_data['library_info']
+            library_name = library_data['library_name']
+            overview_data = library_data['overview_data']
+            top_titles_data = library_data['top_titles_data']
+            
+            logger.info(f"\nGenerating reports: {library_name} ({library_abbrev})")
+            
+            # Create library-specific directory
+            library_dir = create_library_directory(output_dir, library_abbrev)
+            
+            # Generate platform overview report (if requested)
+            if filters['reports'] in ['all', 'overview']:
+                generate_platform_report(
                     library_info,
                     dataset_info,
-                    top_titles_data,
-                    valid_data_types,
+                    overview_data,
                     library_dir
                 )
-        else:
-            logger.warning(f"  No valid data types to report for {library_name}")
+            
+            # Generate top titles reports (if requested and data available)
+            if filters['reports'] in ['all', 'top100']:
+                if valid_data_types and top_titles_data:
+                    generate_top_titles_report(
+                        library_info,
+                        dataset_info,
+                        top_titles_data,
+                        valid_data_types,
+                        library_dir
+                    )
+                else:
+                    logger.warning(f"  No valid data types to report for {library_name}")
+    else:
+        logger.info("\nPHASE 3: Skipping individual library reports (summary mode)")
     
     # Generate dataset summary report (goes to bcla_summaries directory)
+    if filters['reports'] == 'summary':
+        logger.info("\nGenerating BCLA consortium summary...")
     generate_dataset_summary(
         dataset_id,
         dataset_info,
         platform_summary_data,
         bcla_summaries_dir
-    )
-    
+    )    
     logger.info(f"\nCompleted dataset: {dataset_info['name']}")
 
 def main():

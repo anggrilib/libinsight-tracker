@@ -140,6 +140,31 @@ usage_reports/
 └── ... (etc for all datasets)
 ```
 
+### CLI flags:
+
+```bash
+# Just Oxford Grove summaries for all libraries (overview + summary)
+python libinsight_usage_reports.py --datasets grove --reports overview
+
+# Everything for Berea across all datasets
+python libinsight_usage_reports.py --libraries berea
+
+# Top100 for just ASP and Newsbank datasets (all libraries)
+python libinsight_usage_reports.py --datasets asp,newsbank --reports top100
+
+# Generate ONLY BCLA summaries for all datasets (fastest)
+python libinsight_usage_reports.py --reports summary
+
+# Generate ONLY the Oxford Grove BCLA summary
+python libinsight_usage_reports.py --datasets grove --reports summary
+
+# Generate BCLA summaries for ASP and Newsbank only
+python libinsight_usage_reports.py --datasets asp,newsbank --reports summary
+
+# Everything (original behavior - includes summaries)
+python libinsight_usage_reports.py
+```
+
 ## Current Limitations
 
 **IMPORTANT:** This is Version 1.0 (Foundation Only)
