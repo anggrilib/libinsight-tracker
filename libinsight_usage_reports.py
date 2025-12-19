@@ -466,11 +466,11 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
                     first_title = top_use_titles[0]
                     
                     # DIAGNOSTIC: Log what we received
-                    logger.info(f"    DIAGNOSTIC - First title fields: {list(first_title.keys())}")
-                    if 'platform_id' in first_title:
-                        logger.info(f"    DIAGNOSTIC - Title platform_id: {first_title.get('platform_id')} (requested: {platform_id})")
-                    else:
-                        logger.info(f"    DIAGNOSTIC - Title does NOT have platform_id field")
+                    # logger.info(f"    DIAGNOSTIC - First title fields: {list(first_title.keys())}")
+                    # if 'platform_id' in first_title:
+                    #    logger.info(f"    DIAGNOSTIC - Title platform_id: {first_title.get('platform_id')} (requested: {platform_id})")
+                    #else:
+                        #logger.info(f"    DIAGNOSTIC - Title does NOT have platform_id field")
                     
                     # FILTERING LOGIC: Only keep titles that match our platform_id
                     if 'platform_id' in first_title:
@@ -689,7 +689,7 @@ def generate_platform_report(library_info, dataset_info, overview_data, output_d
         logger.error(f"Error generating platform report {filename}: {e}")
         return None
 
-def generate_top_titles_report(library_info, dataset_info, titles_data, valid_data_types, output_dir):
+def generate_top_titles_report(library_info, dataset_info, titles_data, valid_data_types, output_dir,platform_suffix=""):
     """
     Generate CSV reports for top titles by usage.
     
@@ -716,7 +716,7 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
         titles = titles_data[data_type]
         
         # Create filename: {library_abbrev}_{vendor_abbrev}_{data_type}_top100_{FY}.csv
-        filename = f"{library_info['library_abbreviation']}_{dataset_info['abbrev']}_{data_type.lower()}_top100_{FISCAL_YEAR['label']}.csv"
+        filename = f"{library_info['library_abbreviation']}_{dataset_info['abbrev']}_{data_type.lower()}_top100{platform_suffix}_{FISCAL_YEAR['label']}.csv"
         filepath = output_dir / filename
         
         # Define columns for top titles report (matching manual export format)
@@ -911,30 +911,38 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
     # Collect all titles from all libraries
     for library_abbrev, library_data in dataset_library_results.items():
         top_titles_data = library_data.get('top_titles_data', {})
-        
-        for data_type, titles in top_titles_data.items():
-            if data_type not in combined_titles:
-                combined_titles[data_type] = {}
-            
-            # Add each title to the combined dict, using title name as key
-            # This automatically deduplicates and aggregates usage
-            for title in titles:
-                title_key = title.get('title', '')
-                if not title_key:
-                    continue
-                
-                if title_key not in combined_titles[data_type]:
-                    # First time seeing this title - copy it
-                    combined_titles[data_type][title_key] = title.copy()
-                else:
-                    # Title exists - aggregate the usage metrics
-                    existing = combined_titles[data_type][title_key]
-                    for metric in ['total_item_investigations', 'unique_item_investigations', 
-                                   'unique_title_investigations', 'total_item_requests',
-                                   'unique_item_requests', 'unique_title_requests',
-                                   'searches_platform', 'searches_regular', 'searches_federated',
-                                   'searches_automated', 'no_license', 'limit_exceeded']:
-                        existing[metric] = existing.get(metric, 0) + title.get(metric, 0)
+
+        # top_titles_data structure: {platform_id: {'vendor_name': '...', 'data': {data_type: [titles]}}}
+        for platform_id, platform_info in top_titles_data.items():
+            # Extract the actual data dictionary
+            platform_data = platform_info.get('data', {})
+
+            # Now iterate through data types
+            for data_type, titles in platform_data.items():
+                if data_type not in combined_titles:
+                    combined_titles[data_type] = {}
+
+                # Add each title to the combined dict, using title name as key
+                # This automatically deduplicates and aggregates usage
+                for title in titles:
+                    title_key = title.get('title', '')
+
+                    if not title_key:
+                        continue
+
+                    if title_key not in combined_titles[data_type]:
+                        # First time seeing this title - copy it
+                        combined_titles[data_type][title_key] = title.copy()
+
+                    else:
+                        # Title exists - aggregate the usage metrics
+                        existing = combined_titles[data_type][title_key]
+                        for metric in ['total_item_investigations', 'unique_item_investigations', 
+                                       'unique_title_investigations', 'total_item_requests',
+                                       'unique_item_requests', 'unique_title_requests',
+                                       'searches_platform', 'searches_regular', 'searches_federated',
+                                       'searches_automated', 'no_license', 'limit_exceeded']:
+                            existing[metric] = existing.get(metric, 0) + title.get(metric, 0)
     
     # Now generate reports for each data_type
     for data_type in valid_data_types:
@@ -1015,6 +1023,8 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
 # MAIN PROCESSING FUNCTIONS
 # ============================================================================
 
+# For FY 24/25: Including ABC-CLIO (inactive) platforms with Bloomsbury using dataset_platforms variable
+# To exclude inactive platforms: uncomment active_platforms lines in process_dataset() function
 def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, output_dir, filters):
     """
     Process a single dataset and generate all required reports.
@@ -1041,11 +1051,11 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
     ]
     
     # Exclude inactive ABC-CLIO platforms
-    active_platforms = dataset_platforms[
-        ~dataset_platforms['report_type'].str.contains('inactive', case=False, na=False)
-    ]
+   #active_platforms = dataset_platforms[
+   #     ~dataset_platforms['report_type'].str.contains('inactive', case=False, na=False)
+   # ]
     
-    logger.info(f"Found {len(active_platforms)} active platforms for this dataset")
+   # logger.info(f"Found {len(active_platforms)} active platforms for this dataset")
     
     # Storage for all library data in this dataset
     dataset_library_results = {}
@@ -1060,7 +1070,8 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
     logger.info("\nPHASE 1: Collecting data from all libraries...")
 
     # Get list of libraries to process
-    libraries_to_process = active_platforms['library_abbreviation'].unique()
+    #libraries_to_process = active_platforms['library_abbreviation'].unique()
+    libraries_to_process = dataset_platforms['library_abbreviation'].unique()
     
     # Apply library filter if specified
     if filters['libraries']:
@@ -1068,34 +1079,69 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
                                if lib.lower() in filters['libraries']]
         logger.info(f"Filtering to libraries: {', '.join(libraries_to_process)}")
     
+    # Edit
     for library_abbrev in libraries_to_process:
-        library_platforms = active_platforms[
-            active_platforms['library_abbreviation'] == library_abbrev
+        library_platforms = dataset_platforms[
+            dataset_platforms['library_abbreviation'] == library_abbrev
         ]
-        
-        # Get library info from first row
+
+        # Get library info from first row (for library name, etc.)
         library_info = library_platforms.iloc[0].to_dict()
         library_name = library_info['library_name']
-        platform_id = library_info['platform_id']
-        
+    
         logger.info(f"\nCollecting: {library_name} ({library_abbrev})")
-        
-        # Get overview data from API
-        overview_data = get_platform_overview(dataset_id, platform_id, access_token)
-        
-        # Get top titles data from API (skip if only generating summaries)
-        if filters['reports'] != 'summary':
-            top_titles_data = get_top_titles(dataset_id, platform_id, access_token, limit=100)
-        else:
-            top_titles_data = {}  # Empty dict for summary mode        
-        
+
+        # Initialize aggregated data structures
+        combined_overview_data = {}
+        combined_top_titles_data = {}
+
+        # Process each platform for this library
+        for idx, platform_row in library_platforms.iterrows():
+            platform_id = platform_row['platform_id']
+            vendor_name = platform_row['vendor_name']
+
+            logger.info(f"  Processing platform {platform_id} ({vendor_name})...")
+
+            # Get overview data from API
+            platform_overview = get_platform_overview(dataset_id, platform_id, access_token)
+
+            # Aggregate overview data by data_type
+            if platform_overview:
+                for data_type, stats in platform_overview.items():
+                    if data_type not in combined_overview_data:
+                        combined_overview_data[data_type] = {
+                            'searches_platform': 0,
+                            'total_item_investigations': 0,
+                            'total_item_requests': 0,
+                            'unique_item_investigations': 0,
+                            'unique_item_requests': 0,
+                            'unique_title_investigations': 0,
+                            'unique_title_requests': 0
+                        }
+
+                    # Sum the values
+                    for key in combined_overview_data[data_type].keys():
+                        combined_overview_data[data_type][key] += stats.get(key, 0)
+            
+            # Get top titles data from API (skip if only generating summaries)
+            # Store separately by platform for now (combining titles is complex)
+            if filters['reports'] != 'summary':
+                platform_top_titles = get_top_titles(dataset_id, platform_id, access_token, limit=100)
+                if platform_top_titles:
+                    combined_top_titles_data[platform_id] = {
+                        'vendor_name': vendor_name,
+                        'data': platform_top_titles
+                }
+                    
+            time.sleep(0.3)  # Small delay between platforms
+
         # Store results for this library
         dataset_library_results[library_abbrev] = {
             'library_info': library_info,
             'library_name': library_name,
-            'platform_id': platform_id,
-            'overview_data': overview_data,
-            'top_titles_data': top_titles_data
+            'platform_id': None,  # Multiple platforms, no single ID
+            'overview_data': combined_overview_data,
+            'top_titles_data': combined_top_titles_data
         }
         
         # Calculate totals for summary
@@ -1107,11 +1153,11 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         unique_title_investigations = 0
         unique_title_requests = 0
         
-        if overview_data:
+        if combined_overview_data:
             # Sum across all data types
             # Structure is: { 'Book': {...stats...}, 'Journal': {...stats...} }
             # underscore represents 'data_type' for dictionary keys
-            for _, stats in overview_data.items():
+            for _, stats in combined_overview_data.items():
                 searches_platform += stats.get('searches_platform', 0)
                 total_item_investigations += stats.get('total_item_investigations', 0)
                 total_item_requests += stats.get('total_item_requests', 0)
@@ -1140,12 +1186,26 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         logger.info("\nPHASE 2: Analyzing dataset-wide data_types with usage...")
         
         # Create a simplified structure for analysis
+        # Need to flatten multi-platform data into single data_type structure
         analysis_data = {}
         for lib_abbrev, lib_data in dataset_library_results.items():
+            # Combine all platforms' title data into one structure
+            combined_titles = {}
+
+            # lib_data['top_titles_data'] is now: {platform_id: {'vendor_name': ..., 'data': {data_type: [titles]}}}
+            for platform_id, platform_info in lib_data['top_titles_data'].items():
+                platform_titles = platform_info['data']  # This is {data_type: [titles]}
+
+                # Merge into combined_titles by data_type
+                for data_type, titles in platform_titles.items():
+                    if data_type not in combined_titles:
+                        combined_titles[data_type] = []
+                    combined_titles[data_type].extend(titles)
+
             analysis_data[lib_abbrev] = {
-                'top_titles': lib_data['top_titles_data']
+                'top_titles': combined_titles
             }
-        
+                    
         valid_data_types = analyze_dataset_data_types(analysis_data)
         
         if valid_data_types:
@@ -1183,15 +1243,27 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
             # Generate top titles reports (if requested and data available)
             if filters['reports'] in ['all', 'top100']:
                 if valid_data_types and top_titles_data:
-                    generate_top_titles_report(
-                        library_info,
-                        dataset_info,
-                        top_titles_data,
-                        valid_data_types,
-                        library_dir
-                    )
-                else:
-                    logger.warning(f"  No valid data types to report for {library_name}")
+
+                    # Generate separate top 100 report for each platform
+                    for platform_id, platform_data in top_titles_data.items():
+                        vendor_name = platform_data['vendor_name']
+                        platform_titles = platform_data['data']
+
+                        logger.info(f"  Generating top 100 report for {vendor_name} (platform {platform_id})")
+
+                        generate_top_titles_report(
+                            library_info,
+                            dataset_info,
+                            platform_titles,
+                            valid_data_types,
+                            library_dir,
+                            platform_suffix=f"_{vendor_name.replace(' ', '_')}"  # Add vendor to filename
+                        )
+
+            else:
+                logger.warning(f"  No valid data types to report for {library_name}")
+
+
     else:
         logger.info("\nPHASE 3: Skipping individual library reports (summary mode)")
     
