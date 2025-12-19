@@ -439,7 +439,7 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
         params = {
             'from': FISCAL_YEAR['start'],
             'to': FISCAL_YEAR['end'],
-            'platforms': platform_id,
+            'platform_id': platform_id,
             'data_type': data_type,
             'metric_type': 'total_item_requests',  # This determines the sorting
             'limit': limit
@@ -463,9 +463,36 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
                 top_use_titles = payload.get('top_use_titles', [])
                 
                 if top_use_titles and len(top_use_titles) > 0:
-                    all_results[data_type] = top_use_titles
-                    logger.info(f"    {data_type}: {len(top_use_titles)} titles")
+                    first_title = top_use_titles[0]
+                    
+                    # DIAGNOSTIC: Log what we received
+                    logger.info(f"    DIAGNOSTIC - First title fields: {list(first_title.keys())}")
+                    if 'platform_id' in first_title:
+                        logger.info(f"    DIAGNOSTIC - Title platform_id: {first_title.get('platform_id')} (requested: {platform_id})")
+                    else:
+                        logger.info(f"    DIAGNOSTIC - Title does NOT have platform_id field")
+                    
+                    # FILTERING LOGIC: Only keep titles that match our platform_id
+                    if 'platform_id' in first_title:
+                        # Filter to only this platform's titles
+                        platform_titles = [
+                            title for title in top_use_titles 
+                            if title.get('platform_id') == platform_id
+                        ]
+                        
+                        if len(platform_titles) > 0:
+                            logger.info(f"    {data_type}: {len(platform_titles)} titles (filtered from {len(top_use_titles)} total)")
+                            all_results[data_type] = platform_titles
+                        else:
+                            logger.info(f"    {data_type}: 0 titles for this platform (filtered out {len(top_use_titles)} from other platforms)")
+                            all_results[data_type] = []
+                    else:
+                        # No platform_id field - cannot filter
+                        logger.warning(f"    {data_type}: API returned {len(top_use_titles)} titles but no platform_id field")
+                        logger.warning(f"    Cannot filter to platform {platform_id} - returning empty list")
+                        all_results[data_type] = []
                 else:
+                    logger.info(f"    {data_type}: 0 titles")
                     all_results[data_type] = []
             else:
                 all_results[data_type] = []
@@ -476,6 +503,15 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
         except Exception as e:
             logger.warning(f"    Error for {data_type}: {e}")
             all_results[data_type] = []
+    
+    # Sort each data_type's titles: primary by total_item_requests (descending), 
+    # secondary by title (ascending/A-Z) to match LibInsight browser behavior
+    for data_type in all_results:
+        all_results[data_type].sort(
+            key=lambda x: (-x.get('total_item_requests', 0), x.get('title', '').lower())
+        )
+    
+    return all_results
     
     return all_results
 
@@ -848,6 +884,132 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
     except Exception as e:
         logger.error(f"Error generating dataset summary {filename}: {e}")
         return None
+    
+def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_library_results, valid_data_types, bcla_summaries_dir):
+    """
+    Generate combined top 100 titles reports for the entire dataset (all platforms).
+    
+    This creates consortium-wide reports showing the top titles across all libraries.
+    
+    Args:
+        dataset_id (str): Dataset ID
+        dataset_info (dict): Dataset configuration
+        dataset_library_results (dict): Dictionary of all library results
+        valid_data_types (set): Set of data_types that should be reported
+        bcla_summaries_dir (Path): BCLA summaries output directory
+        
+    Returns:
+        list: Paths to generated CSV files
+    """
+    generated_files = []
+    
+    logger.info("\nGenerating combined top 100 titles summaries...")
+    
+    # Aggregate titles from all libraries by data_type
+    combined_titles = {}
+    
+    # Collect all titles from all libraries
+    for library_abbrev, library_data in dataset_library_results.items():
+        top_titles_data = library_data.get('top_titles_data', {})
+        
+        for data_type, titles in top_titles_data.items():
+            if data_type not in combined_titles:
+                combined_titles[data_type] = {}
+            
+            # Add each title to the combined dict, using title name as key
+            # This automatically deduplicates and aggregates usage
+            for title in titles:
+                title_key = title.get('title', '')
+                if not title_key:
+                    continue
+                
+                if title_key not in combined_titles[data_type]:
+                    # First time seeing this title - copy it
+                    combined_titles[data_type][title_key] = title.copy()
+                else:
+                    # Title exists - aggregate the usage metrics
+                    existing = combined_titles[data_type][title_key]
+                    for metric in ['total_item_investigations', 'unique_item_investigations', 
+                                   'unique_title_investigations', 'total_item_requests',
+                                   'unique_item_requests', 'unique_title_requests',
+                                   'searches_platform', 'searches_regular', 'searches_federated',
+                                   'searches_automated', 'no_license', 'limit_exceeded']:
+                        existing[metric] = existing.get(metric, 0) + title.get(metric, 0)
+    
+    # Now generate reports for each data_type
+    for data_type in valid_data_types:
+        if data_type not in combined_titles or not combined_titles[data_type]:
+            continue
+        
+        # Convert dict to list and sort by total_item_requests
+        titles_list = list(combined_titles[data_type].values())
+        titles_list.sort(
+            key=lambda x: (-x.get('total_item_requests', 0), x.get('title', '').lower())
+        )
+        
+        # Limit to top 100
+        titles_list = titles_list[:100]
+        
+        # Create filename: {vendor_abbrev}_combined_{data_type}_top100_{FY}.csv
+        filename = f"{dataset_info['abbrev']}_combined_{data_type.lower()}_top100_{FISCAL_YEAR['label']}.csv"
+        filepath = bcla_summaries_dir / filename
+        
+        # Define columns
+        columns = [
+            'Rank',
+            'Title',
+            'Publisher',
+            'ISBN',
+            'DOI',
+            'Total Item Investigations',
+            'Unique Item Investigations',
+            'Unique Title Investigations',
+            'Total Item Requests',
+            'Unique Item Requests',
+            'Unique Title Requests',
+            'Searches Platform',
+            'Searches Regular',
+            'Searches Federated',
+            'Searches Automated',
+            'No License',
+            'Limit Exceeded'
+        ]
+        
+        try:
+            # Write CSV file
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=columns)
+                writer.writeheader()
+                
+                for rank, title in enumerate(titles_list, start=1):
+                    row = {
+                        'Rank': rank,
+                        'Title': title.get('title', ''),
+                        'Publisher': title.get('publisher', ''),
+                        'ISBN': title.get('isbn', ''),
+                        'DOI': title.get('doi', ''),
+                        'Total Item Investigations': title.get('total_item_investigations', 0),
+                        'Unique Item Investigations': title.get('unique_item_investigations', 0),
+                        'Unique Title Investigations': title.get('unique_title_investigations', 0),
+                        'Total Item Requests': title.get('total_item_requests', 0),
+                        'Unique Item Requests': title.get('unique_item_requests', 0),
+                        'Unique Title Requests': title.get('unique_title_requests', 0),
+                        'Searches Platform': title.get('searches_platform', 0),
+                        'Searches Regular': title.get('searches_regular', 0),
+                        'Searches Federated': title.get('searches_federated', 0),
+                        'Searches Automated': title.get('searches_automated', 0),
+                        'No License': title.get('no_license', 0),
+                        'Limit Exceeded': title.get('limit_exceeded', 0)
+                    }
+                    writer.writerow(row)
+            
+            logger.info(f"  Generated combined summary: {filename}")
+            generated_files.append(str(filepath))
+        
+        except Exception as e:
+            logger.error(f"  Error generating combined summary {filename}: {e}")
+    
+    return generated_files
 
 # ============================================================================
 # MAIN PROCESSING FUNCTIONS
@@ -1041,7 +1203,18 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
         dataset_info,
         platform_summary_data,
         bcla_summaries_dir
-    )    
+    )
+    
+    # Generate combined top 100 titles summaries (skip if only overview reports requested)
+    if filters['reports'] in ['all', 'top100', 'summary'] and valid_data_types:
+        generate_combined_top_titles_summary(
+            dataset_id,
+            dataset_info,
+            dataset_library_results,
+            valid_data_types,
+            bcla_summaries_dir
+        )
+
     logger.info(f"\nCompleted dataset: {dataset_info['name']}")
 
 def main():
