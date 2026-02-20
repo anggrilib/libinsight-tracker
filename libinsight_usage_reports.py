@@ -721,6 +721,7 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
         
         # Define columns for top titles report (matching manual export format)
         columns = [
+            'ID',
             'Rank',
             'Title',
             'Publisher',
@@ -750,6 +751,7 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
                 if titles and len(titles) > 0:
                     for rank, title in enumerate(titles, start=1):
                         row = {
+                            'ID': title.get('id', ''),
                             'Rank': rank,
                             'Title': title.get('title', ''),
                             'Publisher': title.get('publisher', ''),
@@ -925,7 +927,13 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
                 # Add each title to the combined dict, using title name as key
                 # This automatically deduplicates and aggregates usage
                 for title in titles:
-                    title_key = title.get('title', '')
+                    title_id = title.get('id')
+                    if title_id:
+                        title_key = str(title_id)
+                    else:
+                        # Fallback to name key if not ID
+                        title_key = title.get('title', '')
+                        logger.warning(f"Title missing ID field, using title name as key: {title_key}")
 
                     if not title_key:
                         continue
@@ -964,6 +972,7 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
         
         # Define columns
         columns = [
+            'ID',
             'Rank',
             'Title',
             'Publisher',
@@ -991,6 +1000,7 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
                 
                 for rank, title in enumerate(titles_list, start=1):
                     row = {
+                        'ID': title.get('id', ''),
                         'Rank': rank,
                         'Title': title.get('title', ''),
                         'Publisher': title.get('publisher', ''),

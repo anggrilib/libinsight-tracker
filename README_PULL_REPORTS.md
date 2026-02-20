@@ -161,6 +161,9 @@ python libinsight_usage_reports.py --datasets grove --reports summary
 # Generate BCLA summaries for ASP and Newsbank only
 python libinsight_usage_reports.py --datasets asp,newsbank --reports summary
 
+# Generate top-100 reports for one library, one dataset
+python libinsight_usage_reports.py --libraries yh --datasets jstor
+
 # Everything (original behavior - includes summaries)
 python libinsight_usage_reports.py
 ```
@@ -175,6 +178,8 @@ The script currently creates the report **structure** but does not yet populate 
 - ✅ Sets up correct column headers
 - ✅ Generates proper filenames
 - ❌ Reports contain empty/zero data (API calls not yet implemented)
+
+NOTE: Minor variations (typically <2%) may occur between API-generated title reports and browser tool title reports (top100) because where item request counts are equal, browser sorts title Z-A and libinsight_usage_reports sorts title A-Z. Counts may vary slightly due to timing and caching.
 
 ## Next Development Phase
 
@@ -233,8 +238,6 @@ Before we implement the API data retrieval, we need to:
 1. **Test the API endpoints manually** to see what data structure is returned
 2. **Verify which API endpoint gives us the usage statistics** we need
 3. **Understand the data types** for Title Master Reports vs Database Master Reports
-
-Would you like to proceed with API integration testing next?
 
 ## Version History
 

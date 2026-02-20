@@ -49,12 +49,13 @@ Save `sushi_harvest_tracker.py` to a folder on your computer.
 **CLI Flags**
 --auto-discover: A flag (no value needed, presence of flag will auto-build the DATASETS_TO_CHECK based on the e-Resources Platforms endpoint)
 --skip-list: Takes a file path as its value
---auto-enable: (no value needed, presence of flag will enable unenabled platforms) (not yet functional)
+--auto-enable: (no value needed, presence of flag will enable unenabled platforms)
 
 Examples:
 # auto-build DATASETS_TO_CHECK based on list in FIND_PLATFORMS
+# auto-enable unenabled platforms
 # skip platforms listed in skip-platforms.txt saved in project root directory
-python sushi_harvest_tracker.py --auto-discover --skip-list skip-platforms.txt
+python sushi_harvest_tracker.py --auto-discover --skip-list skip-platforms.txt --auto-enable
 
 Open the script in a text editor and find the `DATASETS_TO_CHECK` section (around line 25):
 
