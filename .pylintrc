@@ -1,0 +1,11 @@
+# Pylint configuration for the libinsight-tracker project.
+# See ruff.toml for the companion Ruff configuration.
+
+[MESSAGES CONTROL]
+# duplicate-code (R0801): sushi_reharvest.py intentionally copies the logging
+# (setup_logging/Tee), Chrome-driver, and LibInsight login helpers from
+# sushi_harvest_tracker.py so that each script can be run standalone. R0801
+# only fires when Pylint analyses several modules in one run, which is how the
+# pre-commit hook and lint.ps1/lint.sh invoke it.
+# Re-enable this if those helpers are ever extracted into a shared module.
+disable=duplicate-code

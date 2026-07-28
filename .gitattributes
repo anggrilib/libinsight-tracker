@@ -1,0 +1,11 @@
+# Line-ending rules.
+#
+# core.autocrlf=true on Windows would otherwise rewrite these to CRLF on the
+# next checkout, and a bash script with CRLF line endings fails to run with
+# "bad interpreter: /usr/bin/env bash^M". Pin them to LF on every platform.
+#
+# Deliberately scoped: no global `* text=auto` line, so adding this file does
+# not renormalise every other file in the repo.
+
+*.sh        text eol=lf
+hooks/*     text eol=lf

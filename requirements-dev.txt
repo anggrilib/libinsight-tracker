@@ -1,0 +1,8 @@
+# Development-only tools (linters). Not required to run the scripts.
+# Install with:  pip install -r requirements-dev.txt
+#
+# Versions are pinned exactly so lint results stay reproducible across
+# machines -- linters change their rules between releases. Bump these
+# deliberately when you're ready to adopt newer checks.
+ruff==0.16.0
+pylint==4.0.5

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: lint before every commit.
+#
+#   Ruff   -> blocking (the repo is clean, so this prevents new issues)
+#   Pylint -> blocking (all tracked modules currently rate 10/10)
+#
+# Activate once per clone with:
+#   git config core.hooksPath hooks
+#
+# Bypass in an emergency with:
+#   git commit --no-verify
+
+py_files="sushi_harvest_tracker.py libinsight_usage_reports.py springshare_auth.py sushi_reharvest.py"
+
+echo "pre-commit: running Ruff (blocking)..."
+if ! ruff check .; then
+  echo
+  echo "X Ruff found issues. Fix them (try 'ruff check . --fix') before committing,"
+  echo "  or bypass with 'git commit --no-verify'."
+  exit 1
+fi
+echo "OK Ruff passed."
+
+echo
+echo "pre-commit: running Pylint (blocking)..."
+# shellcheck disable=SC2086
+if ! pylint $py_files; then
+  echo
+  echo "X Pylint found issues. Fix them before committing,"
+  echo "  or bypass with 'git commit --no-verify'."
+  exit 1
+fi
+echo "OK Pylint passed."
+
+exit 0

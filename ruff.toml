@@ -1,0 +1,9 @@
+# Ruff configuration for the libinsight-tracker project.
+# The rules below are intentionally ignored; see notes.
+
+[lint]
+ignore = [
+    "DTZ005",  # datetime.now() without tz: log/CSV filename timestamps use local time on purpose
+    "SIM115",  # open() without context manager: the log file must stay open for the process lifetime
+    "BLE001",  # broad `except Exception`: intentional top-level fatal handler in main()
+]
