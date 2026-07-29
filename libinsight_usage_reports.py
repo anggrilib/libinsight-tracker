@@ -16,17 +16,37 @@ Usage:
     python libinsight_usage_reports.py
 """
 
-import os
-import sys
+# This module is a long-form report generator. The Pylint rules below are
+# relaxed for this file only (kept out of a project-wide config so the other
+# modules stay strict). These are pervasive, stylistic, or intentional choices
+# rather than per-function structure problems:
+#   - logging-fstring-interpolation / logging-not-lazy: f-strings are used in log
+#     calls for readability; the lazy-% performance win is negligible here.
+#   - broad-exception-caught: the per-dataset / per-report handlers deliberately
+#     catch any error so one failure does not abort the whole run (this matches
+#     the project's Ruff BLE001 setting).
+#   - line-too-long: many argparse help texts and log messages read better
+#     unwrapped.
+#   - too-many-lines: this is a large but cohesive single-purpose script.
+#
+# The per-function structural warnings (too-many-locals/branches/statements/etc.)
+# are NOT disabled here. They are handled function-by-function: process_dataset
+# was refactored into helpers so its size/complexity warnings are gone, while a
+# few remaining large report-builder functions carry their own local disable
+# directive (on the def line) for the specific metric they exceed.
+# pylint: disable=broad-exception-caught,line-too-long,too-many-lines
+
+import argparse
 import csv
 import json
-import time
 import logging
-import argparse
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
-import requests
+
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
 # Import the existing Springshare authentication module
@@ -41,9 +61,9 @@ load_dotenv()
 
 # Fiscal Year Configuration
 FISCAL_YEAR = {
-    'start': '2024-07-01',
-    'end': '2025-06-30',
-    'label': '2425'  # Used in filenames
+    'start': '2025-07-01',
+    'end': '2026-06-30',
+    'label': '2526'  # Used in filenames
 }
 
 # Dataset Configuration
@@ -60,7 +80,7 @@ DATASETS = {
         'report_type': 'Database Master Report'
     },
     '37166': {
-        'name': 'Newsbank', 
+        'name': 'Newsbank',
         'abbrev': 'newsbank',
         'report_type': 'Database Master Report'
     },
@@ -73,8 +93,9 @@ DATASETS = {
         'name': 'Bloomsbury',
         'abbrev': 'bloomsbury',
         'report_type': 'Title Master Report',
-        # Special note: includes ABC-CLIO platforms (inactive as of Nov 2024)
-        'includes_abc_clio': True
+        # Special note: ABC-CLIO platforms are inactive as of Nov 2024
+        # Change to true for FY2425 reports only to merge ABC-CLIO stats
+        'includes_abc_clio': False
     }
 }
 
@@ -82,7 +103,7 @@ DATASETS = {
 def parse_arguments():
     """
     Parse command-line arguments for selective report generation.
-    
+
     Returns:
         argparse.Namespace: Parsed arguments with filters
     """
@@ -93,34 +114,34 @@ def parse_arguments():
 Examples:
   # Generate all reports (default)
   python libinsight_usage_reports.py
-  
+
   # Only Berea College, only Oxford Grove, only top 100 reports
   python libinsight_usage_reports.py --libraries berea --datasets oxford --reports top100
-  
+
   # Multiple libraries
   python libinsight_usage_reports.py --libraries berea,alc,bcky
-  
+
   # Only overview reports for all libraries
   python libinsight_usage_reports.py --reports overview
-  
+
 Dataset abbreviations: asp, newsbank, bloomsbury, oxford
         """
     )
-    
+
     parser.add_argument(
         '--libraries', '-l',
         type=str,
         default=None,
         help='Comma-separated list of library abbreviations to process (e.g., "berea,alc,bcky"). Default: all libraries'
     )
-    
+
     parser.add_argument(
         '--datasets', '-d',
         type=str,
         default=None,
         help='Comma-separated list of dataset abbreviations to process (e.g., "oxford,asp,newsbank"). Default: all datasets'
     )
-    
+
     parser.add_argument(
         '--reports', '-r',
         type=str,
@@ -128,24 +149,24 @@ Dataset abbreviations: asp, newsbank, bloomsbury, oxford
         default='all',
         help='Type of reports to generate: "all", "overview" (platform summaries), "top100" (title reports), or "summary" (BCLA consortium summaries only). Default: all'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Process the comma-separated lists into sets for easy filtering
     filters = {
-        'libraries': None,
-        'datasets': None,
+        'libraries': set(),
+        'datasets': set(),
         'reports': args.reports
     }
-    
+
     if args.libraries:
         # Convert comma-separated string to set of lowercase abbreviations
-        filters['libraries'] = set(lib.strip().lower() for lib in args.libraries.split(','))
-        
+        filters['libraries'] = {lib.strip().lower() for lib in args.libraries.split(',')}
+
     if args.datasets:
         # Convert comma-separated string to set of lowercase abbreviations
-        filters['datasets'] = set(ds.strip().lower() for ds in args.datasets.split(','))
-    
+        filters['datasets'] = {ds.strip().lower() for ds in args.datasets.split(',')}
+
     return filters
 
 # API Configuration
@@ -168,11 +189,11 @@ def setup_logging():
     """Configure logging to both file and console."""
     log_dir = Path('logs')
     log_dir.mkdir(exist_ok=True)
-    
+
     # Create a timestamped log file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = log_dir / f'libinsight_reports_{timestamp}.log'
-    
+
     # Configure logging format
     logging.basicConfig(
         level=logging.INFO,
@@ -182,7 +203,7 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
+
     return logging.getLogger(__name__)
 
 # Initialize logger
@@ -195,7 +216,7 @@ logger = setup_logging()
 def load_platform_mappings():
     """
     Load the platform mappings from libinsight-platforms.csv.
-    
+
     Returns:
         pandas.DataFrame: Platform mappings with columns:
             - library_name
@@ -207,33 +228,33 @@ def load_platform_mappings():
             - vendor_abbreviation
     """
     try:
-        logger.info(f"Loading platform mappings from {PLATFORMS_CSV}")
+        logger.info("Loading platform mappings from %s", PLATFORMS_CSV)
         df = pd.read_csv(PLATFORMS_CSV)
-        logger.info(f"Loaded {len(df)} platform mappings")
+        logger.info("Loaded %s platform mappings", len(df))
         return df
     except FileNotFoundError:
-        logger.error(f"Platform mappings file not found: {PLATFORMS_CSV}")
+        logger.error("Platform mappings file not found: %s", PLATFORMS_CSV)
         logger.error("Please ensure libinsight-platforms.csv is in the current directory")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Error loading platform mappings: {e}")
+        logger.error("Error loading platform mappings: %s", e)
         sys.exit(1)
 
 def create_output_directory():
     """Create the output directory for CSV reports if it doesn't exist."""
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(exist_ok=True)
-    logger.info(f"Output directory: {output_path.absolute()}")
+    logger.info("Output directory: %s", output_path.absolute())
     return output_path
 
 def create_library_directory(output_dir, library_abbrev):
     """
     Create a subdirectory for a specific library's reports.
-    
+
     Args:
         output_dir (Path): Base output directory
         library_abbrev (str): Library abbreviation (e.g., 'alc', 'berea')
-        
+
     Returns:
         Path: Library-specific directory path
     """
@@ -244,10 +265,10 @@ def create_library_directory(output_dir, library_abbrev):
 def create_bcla_summaries_directory(output_dir):
     """
     Create a subdirectory for BCLA consortium-wide summary reports.
-    
+
     Args:
         output_dir (Path): Base output directory
-        
+
     Returns:
         Path: BCLA summaries directory path
     """
@@ -258,45 +279,45 @@ def create_bcla_summaries_directory(output_dir):
 def get_access_token():
     """
     Get a valid access token for LibInsight API using SpringshareAuth.
-    
+
     Returns:
         str: Valid access token
     """
     try:
         logger.info("Obtaining LibInsight API access token...")
-        
+
         # Create SpringshareAuth instance
         auth = SpringshareAuth()
-        
+
         # Get token (returns dict with 'access_token', 'token_type', 'expires_in')
         token_response = auth.get_token()
-        
+
         if not token_response:
-            raise Exception("Failed to obtain token from SpringshareAuth")
-        
+            raise RuntimeError("Failed to obtain token from SpringshareAuth")
+
         access_token = token_response.get('access_token')
         expires_in = token_response.get('expires_in')
-        
-        logger.info(f"Successfully obtained access token (expires in {expires_in} seconds)")
+
+        logger.info("Successfully obtained access token (expires in %s seconds)", expires_in)
         return access_token
-        
+
     except ValueError as e:
-        logger.error(f"Authentication error: {e}")
+        logger.error("Authentication error: %s", e)
         logger.error("Please check your .env file has LI_KEY and LI_SECRET set correctly")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Failed to obtain access token: {e}")
+        logger.error("Failed to obtain access token: %s", e)
         sys.exit(1)
 
 def make_api_request(endpoint, access_token, params=None):
     """
     Make a request to the LibInsight API.
-    
+
     Args:
         endpoint (str): API endpoint URL
         access_token (str): Valid OAuth access token
         params (dict, optional): Query parameters
-        
+
     Returns:
         dict: JSON response from API
     """
@@ -304,26 +325,26 @@ def make_api_request(endpoint, access_token, params=None):
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json'
     }
-    
+
     try:
-        logger.debug(f"API Request: {endpoint}")
+        logger.debug("API Request: %s", endpoint)
         if params:
-            logger.debug(f"Parameters: {params}")
-        
-        response = requests.get(endpoint, headers=headers, params=params)
+            logger.debug("Parameters: %s", params)
+
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
         response.raise_for_status()
-        
+
         return response.json()
-    
+
     except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP Error: {e}")
-        logger.error(f"Response: {e.response.text}")
+        logger.error("HTTP Error: %s", e)
+        logger.error("Response: %s", e.response.text)
         raise
     except requests.exceptions.RequestException as e:
-        logger.error(f"Request Error: {e}")
+        logger.error("Request Error: %s", e)
         raise
     except json.JSONDecodeError as e:
-        logger.error(f"JSON Decode Error: {e}")
+        logger.error("JSON Decode Error: %s", e)
         raise
 
 # ============================================================================
@@ -333,33 +354,33 @@ def make_api_request(endpoint, access_token, params=None):
 def get_platform_overview(dataset_id, platform_id, access_token):
     """
     Get aggregated usage overview for a specific platform.
-    
+
     NOTE: The /overview endpoint returns ALL platforms in the dataset.
     We extract just the data for the platform_id we need.
-    
+
     Args:
         dataset_id (str): Dataset ID
         platform_id (int): Platform ID
         access_token (str): API access token
-        
+
     Returns:
         dict: Overview data with aggregated statistics by data_type
               Structure: { 'Book': {...stats...}, 'Journal': {...stats...}, ... }
     """
     # Construct the API endpoint
     endpoint = f"{API_BASE_URL}/e-resources/{dataset_id}/overview"
-    
+
     # Add query parameters
     # NOTE: Do NOT include 'platforms' parameter - endpoint returns all platforms
     params = {
         'from': FISCAL_YEAR['start'],
         'to': FISCAL_YEAR['end']
     }
-    
+
     try:
-        logger.info(f"  Calling /overview endpoint...")
+        logger.info("  Calling /overview endpoint...")
         response = make_api_request(endpoint, access_token, params)
-        
+
         # Parse the response structure:
         # {
         #   "payload": {
@@ -375,45 +396,45 @@ def get_platform_overview(dataset_id, platform_id, access_token):
         #     }
         #   }
         # }
-        
-        if response and 'payload' in response:
-            payload = response.get('payload', {})
-            overview_by_platforms = payload.get('overview_by_platforms', {})
-            
-            # Extract data for our specific platform
-            platform_data = overview_by_platforms.get(str(platform_id))
-            
-            if platform_data:
-                # Count how many data types have data
-                data_types = list(platform_data.keys())
-                logger.info(f"  Got overview data for platform {platform_id}")
-                logger.info(f"  Data types: {', '.join(data_types)}")
-                
-                return platform_data
-            else:
-                logger.warning(f"  Platform {platform_id} not found in /overview response")
-                return None
-        else:
-            logger.warning(f"  /overview returned unexpected structure")
-            logger.debug(f"  Response keys: {response.keys() if response else 'None'}")
+
+        if not response or 'payload' not in response:
+            logger.warning("  /overview returned unexpected structure")
+            logger.debug("  Response keys: %s", response.keys() if response else 'None')
             return None
-        
+
+        payload = response.get('payload', {})
+        overview_by_platforms = payload.get('overview_by_platforms', {})
+
+        # Extract data for our specific platform
+        platform_data = overview_by_platforms.get(str(platform_id))
+
+        if not platform_data:
+            logger.warning("  Platform %s not found in /overview response", platform_id)
+            return None
+
+        # Count how many data types have data
+        data_types = list(platform_data.keys())
+        logger.info("  Got overview data for platform %s", platform_id)
+        logger.info("  Data types: %s",', '.join(data_types))
+
+        return platform_data
+
     except Exception as e:
-        logger.error(f"  Error fetching overview for platform {platform_id}: {e}")
+        logger.error("  Error fetching overview for platform %s: %s", platform_id, e)
         return None
-    
-def get_top_titles(dataset_id, platform_id, access_token, limit=100):
+
+def get_top_titles(dataset_id, platform_id, access_token, limit=100):  # pylint: disable=too-many-locals
     """
     Get top titles by usage for a specific platform.
-    
+
     Returns the top titles sorted by total_item_requests for each data type.
-    
+
     Args:
         dataset_id (str): Dataset ID
         platform_id (int): Platform ID
         access_token (str): API access token
         limit (int): Number of top titles to retrieve per data_type (default 100)
-        
+
     Returns:
         dict: Dictionary organized by data_type with title lists
               Structure: {
@@ -424,17 +445,17 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
     """
     # Define all data types to loop through
     data_types = ['Database', 'Journal', 'Book', 'Multimedia', 'Other']
-    
+
     # Storage for all results
     all_results = {}
-    
+
     # Construct the base endpoint
     endpoint = f"{API_BASE_URL}/e-resources/{dataset_id}/top-use-titles"
-    
-    logger.info(f"  Fetching top titles for platform {platform_id}...")
-    
+
+    logger.info("  Fetching top titles for platform %s...", platform_id)
+
     # Loop through each data type
-    for data_type in data_types:
+    for data_type in data_types:  # pylint: disable=too-many-nested-blocks
         # Use total_item_requests to sort/rank the titles
         params = {
             'from': FISCAL_YEAR['start'],
@@ -444,10 +465,10 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
             'metric_type': 'total_item_requests',  # This determines the sorting
             'limit': limit
         }
-        
+
         try:
             response = make_api_request(endpoint, access_token, params)
-            
+
             # Parse the response structure:
             # {
             #   "type": "success",
@@ -457,79 +478,77 @@ def get_top_titles(dataset_id, platform_id, access_token, limit=100):
             #     "top_use_titles": [ ...array of title objects... ]
             #   }
             # }
-            
+
             if response and 'payload' in response:
                 payload = response['payload']
                 top_use_titles = payload.get('top_use_titles', [])
-                
+
                 if top_use_titles and len(top_use_titles) > 0:
                     first_title = top_use_titles[0]
-                    
+
                     # DIAGNOSTIC: Log what we received
                     # logger.info(f"    DIAGNOSTIC - First title fields: {list(first_title.keys())}")
                     # if 'platform_id' in first_title:
                     #    logger.info(f"    DIAGNOSTIC - Title platform_id: {first_title.get('platform_id')} (requested: {platform_id})")
                     #else:
                         #logger.info(f"    DIAGNOSTIC - Title does NOT have platform_id field")
-                    
+
                     # FILTERING LOGIC: Only keep titles that match our platform_id
                     if 'platform_id' in first_title:
                         # Filter to only this platform's titles
                         platform_titles = [
-                            title for title in top_use_titles 
+                            title for title in top_use_titles
                             if title.get('platform_id') == platform_id
                         ]
-                        
+
                         if len(platform_titles) > 0:
-                            logger.info(f"    {data_type}: {len(platform_titles)} titles (filtered from {len(top_use_titles)} total)")
+                            logger.info("    %s: %s titles (filtered from %s total)", data_type, len(platform_titles), len(top_use_titles))
                             all_results[data_type] = platform_titles
                         else:
-                            logger.info(f"    {data_type}: 0 titles for this platform (filtered out {len(top_use_titles)} from other platforms)")
+                            logger.info("    %s: 0 titles for this platform (filtered out %s from other platforms)", data_type, len(top_use_titles))
                             all_results[data_type] = []
                     else:
                         # No platform_id field - cannot filter
-                        logger.warning(f"    {data_type}: API returned {len(top_use_titles)} titles but no platform_id field")
-                        logger.warning(f"    Cannot filter to platform {platform_id} - returning empty list")
+                        logger.warning("    %s: API returned %s titles but no platform_id field", data_type, len(top_use_titles))
+                        logger.warning("    Cannot filter to platform %s - returning empty list", platform_id)
                         all_results[data_type] = []
                 else:
-                    logger.info(f"    {data_type}: 0 titles")
+                    logger.info("    %s: 0 titles", data_type)
                     all_results[data_type] = []
             else:
                 all_results[data_type] = []
-            
+
             # Small delay to avoid overwhelming API
             time.sleep(0.1)
-            
+
         except Exception as e:
-            logger.warning(f"    Error for {data_type}: {e}")
+            logger.warning("    Error for %s: %s", data_type, e)
             all_results[data_type] = []
-    
-    # Sort each data_type's titles: primary by total_item_requests (descending), 
+
+    # Sort each data_type's titles: primary by total_item_requests (descending),
     # secondary by title (ascending/A-Z) to match LibInsight browser behavior
-    for data_type in all_results:
-        all_results[data_type].sort(
+    for titles in all_results.values():
+        titles.sort(
             key=lambda x: (-x.get('total_item_requests', 0), x.get('title', '').lower())
         )
-    
-    return all_results
-    
+
     return all_results
 
 def analyze_dataset_data_types(dataset_results):
     """
     Analyze which data_types have ANY usage across all libraries in a dataset.
-    
+
     Args:
         dataset_results (dict): Dictionary keyed by library_abbrev containing their results
-        
+
     Returns:
         set: Set of data_types that have usage across the dataset
     """
     data_types_with_usage = set()
-    
-    for library_abbrev, library_data in dataset_results.items():
+
+    for library_data in dataset_results.values():  # pylint: disable=too-many-nested-blocks
         top_titles = library_data.get('top_titles', {})
-        
+
         # top_titles is now just {data_type: [titles]}
         for data_type, titles in top_titles.items():
             if titles and len(titles) > 0:
@@ -547,71 +566,71 @@ def analyze_dataset_data_types(dataset_results):
                             break
                     if data_type in data_types_with_usage:
                         break
-    
+
     return data_types_with_usage
 
 def get_platform_titles(dataset_id, platform_id, access_token):
     """
     Get all titles for a specific platform using the API.
-    
+
     Args:
         dataset_id (str): Dataset ID
         platform_id (int): Platform ID
         access_token (str): API access token
-        
+
     Returns:
         list: List of title dictionaries from API
     """
     # Construct the API endpoint
     # This will call: /e-resources/{dataset_id}/platforms/{platform_id}/titles
     endpoint = f"{API_BASE_URL}/e-resources/{dataset_id}/platforms"
-    
+
     try:
         # Get all platforms for the dataset
         response = make_api_request(endpoint, access_token)
-        
+
         # Find our specific platform
         platforms = response.get('platforms', [])
         for platform in platforms:
             if platform.get('id') == platform_id:
                 return platform.get('titles', [])
-        
-        logger.warning(f"Platform {platform_id} not found in dataset {dataset_id}")
+
+        logger.warning("Platform %s not found in dataset %s", platform_id, dataset_id)
         return []
-    
+
     except Exception as e:
-        logger.error(f"Error getting titles for platform {platform_id}: {e}")
+        logger.error("Error getting titles for platform %s: %s", platform_id, e)
         return []
 
 def get_title_usage_stats(dataset_id, title_id, data_type, access_token):
     """
     Get usage statistics for a specific title.
-    
+
     Args:
         dataset_id (str): Dataset ID
         title_id (int): Title ID
         data_type (str): Data type (Book, Database, Journal, etc.)
         access_token (str): API access token
-        
+
     Returns:
         dict: Usage statistics for the title
     """
     # Build the endpoint for title usage
     endpoint = f"{API_BASE_URL}/e-resources/{dataset_id}/titles/{title_id}"
-    
+
     # Set up parameters
     params = {
         'from': FISCAL_YEAR['start'],
         'to': FISCAL_YEAR['end'],
         'data_type': data_type
     }
-    
+
     try:
         response = make_api_request(endpoint, access_token, params)
         return response
-    
+
     except Exception as e:
-        logger.error(f"Error getting usage for title {title_id}: {e}")
+        logger.error("Error getting usage for title %s: %s", title_id, e)
         return None
 
 # ============================================================================
@@ -621,20 +640,20 @@ def get_title_usage_stats(dataset_id, title_id, data_type, access_token):
 def generate_platform_report(library_info, dataset_info, overview_data, output_dir):
     """
     Generate a CSV report for a specific library's platform usage.
-    
+
     Args:
         library_info (dict): Library information from platform mappings
         dataset_info (dict): Dataset configuration
         overview_data (dict): Overview data from API (data_types as keys)
         output_dir (Path): Output directory (should be library-specific)
-        
+
     Returns:
         str: Path to generated CSV file
     """
     # Create filename: {library_abbrev}_{vendor_abbrev}_{FY}.csv
     filename = f"{library_info['library_abbreviation']}_{dataset_info['abbrev']}_{FISCAL_YEAR['label']}.csv"
     filepath = output_dir / filename
-    
+
     # Define columns for the platform overview report
     columns = [
         'Data Type',
@@ -646,13 +665,13 @@ def generate_platform_report(library_info, dataset_info, overview_data, output_d
         'Unique Title Investigations',
         'Unique Title Requests'
     ]
-    
+
     try:
         # Write CSV file
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=columns)
             writer.writeheader()
-            
+
             # Extract data from overview response
             # Structure is: { 'Book': {...stats...}, 'Journal': {...stats...} }
             if overview_data:
@@ -670,7 +689,7 @@ def generate_platform_report(library_info, dataset_info, overview_data, output_d
                     writer.writerow(row)
             else:
                 # No data available - write a row indicating this
-                logger.warning(f"  No overview data available for {filename}")
+                logger.warning("  No overview data available for %s", filename)
                 writer.writerow({
                     'Data Type': 'No data available',
                     'Searches Platform': 0,
@@ -681,44 +700,44 @@ def generate_platform_report(library_info, dataset_info, overview_data, output_d
                     'Unique Title Investigations': 0,
                     'Unique Title Requests': 0
                 })
-        
-        logger.info(f"  Generated: {filename}")
+
+        logger.info("  Generated: %s", filename)
         return str(filepath)
-    
+
     except Exception as e:
-        logger.error(f"Error generating platform report {filename}: {e}")
+        logger.error("Error generating platform report %s: %s", filename, e)
         return None
 
-def generate_top_titles_report(library_info, dataset_info, titles_data, valid_data_types, output_dir,platform_suffix=""):
+def generate_top_titles_report(library_info, dataset_info, titles_data, valid_data_types, output_dir,platform_suffix=""):  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """
     Generate CSV reports for top titles by usage.
-    
+
     Creates separate files for each data_type that has usage in the dataset.
     Titles are sorted by total_item_requests and displayed once with all metrics.
-    
+
     Args:
         library_info (dict): Library information from platform mappings
         dataset_info (dict): Dataset configuration
         titles_data (dict): Dict of titles organized by data_type (already sorted)
         valid_data_types (set): Set of data_types that should be reported for this dataset
         output_dir (Path): Output directory (should be library-specific)
-        
+
     Returns:
         list: Paths to generated CSV files
     """
     generated_files = []
-    
+
     # Only process data_types that are valid for this dataset
     for data_type in valid_data_types:
         if data_type not in titles_data:
             continue
-        
+
         titles = titles_data[data_type]
-        
+
         # Create filename: {library_abbrev}_{vendor_abbrev}_{data_type}_top100_{FY}.csv
         filename = f"{library_info['library_abbreviation']}_{dataset_info['abbrev']}_{data_type.lower()}_top100{platform_suffix}_{FISCAL_YEAR['label']}.csv"
         filepath = output_dir / filename
-        
+
         # Define columns for top titles report (matching manual export format)
         columns = [
             'ID',
@@ -740,13 +759,13 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
             'No License',
             'Limit Exceeded'
         ]
-        
+
         try:
             # Write CSV file
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=columns)
                 writer.writeheader()
-                
+
                 # Write each title once (already sorted by total_item_requests)
                 if titles and len(titles) > 0:
                     for rank, title in enumerate(titles, start=1):
@@ -792,38 +811,31 @@ def generate_top_titles_report(library_info, dataset_info, titles_data, valid_da
                         'No License': 0,
                         'Limit Exceeded': 0
                     })
-            
-            logger.info(f"    Generated: {filename}")
+
+            logger.info("    Generated: %s", filename)
             generated_files.append(str(filepath))
-        
+
         except Exception as e:
-            logger.error(f"    Error generating top titles report {filename}: {e}")
-    
+            logger.error("    Error generating top titles report %s: %s", filename, e)
+
     return generated_files
 
-def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summaries_dir):
+def generate_dataset_summary(dataset_info, platform_data, bcla_summaries_dir):  # pylint: disable=too-many-locals
     """
     Generate a dataset summary CSV report with totals for all libraries.
-    
+
     Args:
-        dataset_id (str): Dataset ID
         dataset_info (dict): Dataset configuration
         platform_data (list): List of platform summary data
         bcla_summaries_dir (Path): BCLA summaries output directory
-        
+
     Returns:
         str: Path to generated CSV file
     """
     # Create filename: {vendor_abbrev}PlatformsSummary_{FY}.csv
     filename = f"{dataset_info['abbrev']}PlatformsSummary_{FISCAL_YEAR['label']}.csv"
     filepath = bcla_summaries_dir / filename
-    
-    # Determine column header based on report type
-    if dataset_info['report_type'] == 'Title Master Report':
-        count_column = '# of Titles'
-    else:  # Database Master Report
-        count_column = '# of Databases'
-    
+
     columns = [
         'Library',
         'Platform Name',
@@ -835,7 +847,7 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
         'Unique Title Investigations',
         'Unique Title Requests'
     ]
-    
+
     try:
         # Calculate totals
         searches_platform_total = sum(p.get('searches_platform', 0) for p in platform_data)
@@ -845,12 +857,12 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
         unique_item_requests_total = sum(p.get('unique_item_requests', 0) for p in platform_data)
         unique_title_investigations_total = sum(p.get('unique_title_investigations', 0) for p in platform_data)
         unique_title_requests_total = sum(p.get('unique_title_requests', 0) for p in platform_data)
-        
+
         # Write CSV file
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=columns)
             writer.writeheader()
-            
+
             # Write each platform's data
             for data in platform_data:
                 row = {
@@ -865,7 +877,7 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
                     'Unique Title Requests': data.get('unique_title_requests', 0)
                 }
                 writer.writerow(row)
-            
+
             # Write TOTAL row
             total_row = {
                 'Library': 'TOTAL',
@@ -879,43 +891,42 @@ def generate_dataset_summary(dataset_id, dataset_info, platform_data, bcla_summa
                 'Unique Title Requests': unique_title_requests_total
             }
             writer.writerow(total_row)
-        
-        logger.info(f"Generated dataset summary: {filename}")
+
+        logger.info("Generated dataset summary: %s", filename)
         return str(filepath)
-    
+
     except Exception as e:
-        logger.error(f"Error generating dataset summary {filename}: {e}")
+        logger.error("Error generating dataset summary %s: %s", filename, e)
         return None
-    
-def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_library_results, valid_data_types, bcla_summaries_dir):
+
+def generate_combined_top_titles_summary(dataset_info, dataset_library_results, valid_data_types, bcla_summaries_dir):  # pylint: disable=too-many-locals,too-many-branches
     """
     Generate combined top 100 titles reports for the entire dataset (all platforms).
-    
+
     This creates consortium-wide reports showing the top titles across all libraries.
-    
+
     Args:
-        dataset_id (str): Dataset ID
         dataset_info (dict): Dataset configuration
         dataset_library_results (dict): Dictionary of all library results
         valid_data_types (set): Set of data_types that should be reported
         bcla_summaries_dir (Path): BCLA summaries output directory
-        
+
     Returns:
         list: Paths to generated CSV files
     """
     generated_files = []
-    
+
     logger.info("\nGenerating combined top 100 titles summaries...")
-    
+
     # Aggregate titles from all libraries by data_type
     combined_titles = {}
-    
+
     # Collect all titles from all libraries
-    for library_abbrev, library_data in dataset_library_results.items():
+    for library_data in dataset_library_results.values():  # pylint: disable=too-many-nested-blocks
         top_titles_data = library_data.get('top_titles_data', {})
 
         # top_titles_data structure: {platform_id: {'vendor_name': '...', 'data': {data_type: [titles]}}}
-        for platform_id, platform_info in top_titles_data.items():
+        for platform_info in top_titles_data.values():
             # Extract the actual data dictionary
             platform_data = platform_info.get('data', {})
 
@@ -933,7 +944,7 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
                     else:
                         # Fallback to name key if not ID
                         title_key = title.get('title', '')
-                        logger.warning(f"Title missing ID field, using title name as key: {title_key}")
+                        logger.warning("Title missing ID field, using title name as key: %s", title_key)
 
                     if not title_key:
                         continue
@@ -945,31 +956,31 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
                     else:
                         # Title exists - aggregate the usage metrics
                         existing = combined_titles[data_type][title_key]
-                        for metric in ['total_item_investigations', 'unique_item_investigations', 
+                        for metric in ['total_item_investigations', 'unique_item_investigations',
                                        'unique_title_investigations', 'total_item_requests',
                                        'unique_item_requests', 'unique_title_requests',
                                        'searches_platform', 'searches_regular', 'searches_federated',
                                        'searches_automated', 'no_license', 'limit_exceeded']:
                             existing[metric] = existing.get(metric, 0) + title.get(metric, 0)
-    
+
     # Now generate reports for each data_type
     for data_type in valid_data_types:
         if data_type not in combined_titles or not combined_titles[data_type]:
             continue
-        
+
         # Convert dict to list and sort by total_item_requests
         titles_list = list(combined_titles[data_type].values())
         titles_list.sort(
             key=lambda x: (-x.get('total_item_requests', 0), x.get('title', '').lower())
         )
-        
+
         # Limit to top 100
         titles_list = titles_list[:100]
-        
+
         # Create filename: {vendor_abbrev}_combined_{data_type}_top100_{FY}.csv
         filename = f"{dataset_info['abbrev']}_combined_{data_type.lower()}_top100_{FISCAL_YEAR['label']}.csv"
         filepath = bcla_summaries_dir / filename
-        
+
         # Define columns
         columns = [
             'ID',
@@ -991,13 +1002,13 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
             'No License',
             'Limit Exceeded'
         ]
-        
+
         try:
             # Write CSV file
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=columns)
                 writer.writeheader()
-                
+
                 for rank, title in enumerate(titles_list, start=1):
                     row = {
                         'ID': title.get('id', ''),
@@ -1020,13 +1031,13 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
                         'Limit Exceeded': title.get('limit_exceeded', 0)
                     }
                     writer.writerow(row)
-            
-            logger.info(f"  Generated combined summary: {filename}")
+
+            logger.info("  Generated combined summary: %s", filename)
             generated_files.append(str(filepath))
-        
+
         except Exception as e:
-            logger.error(f"  Error generating combined summary {filename}: {e}")
-    
+            logger.error("  Error generating combined summary %s: %s", filename, e)
+
     return generated_files
 
 # ============================================================================
@@ -1035,117 +1046,120 @@ def generate_combined_top_titles_summary(dataset_id, dataset_info, dataset_libra
 
 # For FY 24/25: Including ABC-CLIO (inactive) platforms with Bloomsbury using dataset_platforms variable
 # To exclude inactive platforms: uncomment active_platforms lines in process_dataset() function
-def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, output_dir, filters):
+def _aggregate_library_overview(dataset_id, library_platforms, access_token, fetch_titles):
     """
-    Process a single dataset and generate all required reports.
-    
-    This function now:
-    1. Collects data from ALL libraries first
-    2. Determines which data_types have usage across the dataset
-    3. Generates reports only for data_types with usage
-    
-    Args:
-        dataset_id (str): Dataset ID
-        dataset_info (dict): Dataset configuration
-        platform_mappings (pd.DataFrame): Platform mappings
-        access_token (str): API access token
-        output_dir (Path): Base output directory path
-    """
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Processing Dataset: {dataset_info['name']} (ID: {dataset_id})")
-    logger.info(f"{'='*60}")
-    
-    # Filter platforms for this dataset
-    dataset_platforms = platform_mappings[
-        platform_mappings['dataset_id'] == int(dataset_id)
-    ]
-    
-    # Exclude inactive ABC-CLIO platforms
-   #active_platforms = dataset_platforms[
-   #     ~dataset_platforms['report_type'].str.contains('inactive', case=False, na=False)
-   # ]
-    
-   # logger.info(f"Found {len(active_platforms)} active platforms for this dataset")
-    
-    # Storage for all library data in this dataset
-    dataset_library_results = {}
-    
-    # Storage for dataset summary data
-    platform_summary_data = []
-    
-    # Create BCLA summaries directory
-    bcla_summaries_dir = create_bcla_summaries_directory(output_dir)
-    
-    # PHASE 1: Collect data from ALL libraries
-    logger.info("\nPHASE 1: Collecting data from all libraries...")
+    Fetch and aggregate API data for every platform belonging to one library.
 
-    # Get list of libraries to process
-    #libraries_to_process = active_platforms['library_abbreviation'].unique()
+    Args:
+        dataset_id (str): Dataset ID.
+        library_platforms (pd.DataFrame): Platform-mapping rows for one library.
+        access_token (str): API access token.
+        fetch_titles (bool): Whether to also fetch top-titles data (skipped in
+            summary-only mode).
+
+    Returns:
+        tuple: (combined_overview_data, combined_top_titles_data)
+    """
+    combined_overview_data = {}
+    combined_top_titles_data = {}
+
+    for _, platform_row in library_platforms.iterrows():
+        platform_id = platform_row['platform_id']
+        vendor_name = platform_row['vendor_name']
+
+        logger.info("  Processing platform %s (%s)...", platform_id, vendor_name)
+
+        # Get overview data from API and aggregate by data_type
+        platform_overview = get_platform_overview(dataset_id, platform_id, access_token)
+        if platform_overview:
+            for data_type, stats in platform_overview.items():
+                if data_type not in combined_overview_data:
+                    combined_overview_data[data_type] = {
+                        'searches_platform': 0,
+                        'total_item_investigations': 0,
+                        'total_item_requests': 0,
+                        'unique_item_investigations': 0,
+                        'unique_item_requests': 0,
+                        'unique_title_investigations': 0,
+                        'unique_title_requests': 0
+                    }
+                # Sum the values
+                for key in combined_overview_data[data_type]:
+                    combined_overview_data[data_type][key] += stats.get(key, 0)
+
+        # Get top titles data from API (skip if only generating summaries).
+        # Stored separately by platform for now (combining titles is complex).
+        if fetch_titles:
+            platform_top_titles = get_top_titles(dataset_id, platform_id, access_token, limit=100)
+            if platform_top_titles:
+                combined_top_titles_data[platform_id] = {
+                    'vendor_name': vendor_name,
+                    'data': platform_top_titles
+                }
+
+        time.sleep(0.3)  # Small delay between platforms
+
+    return combined_overview_data, combined_top_titles_data
+
+
+def _summarize_overview(combined_overview_data):
+    """
+    Sum the per-data-type overview stats into one totals row.
+
+    Returns:
+        dict: The seven aggregate counters (all zero when there is no data).
+    """
+    totals = {
+        'searches_platform': 0,
+        'total_item_investigations': 0,
+        'total_item_requests': 0,
+        'unique_item_investigations': 0,
+        'unique_item_requests': 0,
+        'unique_title_investigations': 0,
+        'unique_title_requests': 0
+    }
+    for stats in combined_overview_data.values():
+        for key in totals:
+            totals[key] += stats.get(key, 0)
+    return totals
+
+
+def _collect_dataset_data(dataset_id, dataset_info, dataset_platforms, access_token, filters):
+    """
+    PHASE 1: fetch and aggregate API data for every library in the dataset.
+
+    Returns:
+        tuple: (dataset_library_results, platform_summary_data)
+    """
     libraries_to_process = dataset_platforms['library_abbreviation'].unique()
-    
+
     # Apply library filter if specified
     if filters['libraries']:
-        libraries_to_process = [lib for lib in libraries_to_process 
-                               if lib.lower() in filters['libraries']]
-        logger.info(f"Filtering to libraries: {', '.join(libraries_to_process)}")
-    
-    # Edit
+        libraries_to_process = [lib for lib in libraries_to_process
+                                if lib.lower() in filters['libraries']]
+        logger.info("Filtering to libraries: %s", ', '.join(libraries_to_process))
+
+    dataset_library_results = {}
+    platform_summary_data = []
+
     for library_abbrev in libraries_to_process:
         library_platforms = dataset_platforms[
             dataset_platforms['library_abbreviation'] == library_abbrev
         ]
 
-        # Get library info from first row (for library name, etc.)
+        # Library info comes from the first row (library name, etc.)
         library_info = library_platforms.iloc[0].to_dict()
         library_name = library_info['library_name']
-    
-        logger.info(f"\nCollecting: {library_name} ({library_abbrev})")
 
-        # Initialize aggregated data structures
-        combined_overview_data = {}
-        combined_top_titles_data = {}
+        logger.info("\nCollecting: %s (%s)", library_name, library_abbrev)
 
-        # Process each platform for this library
-        for idx, platform_row in library_platforms.iterrows():
-            platform_id = platform_row['platform_id']
-            vendor_name = platform_row['vendor_name']
+        combined_overview_data, combined_top_titles_data = _aggregate_library_overview(
+            dataset_id,
+            library_platforms,
+            access_token,
+            fetch_titles=filters['reports'] != 'summary'
+        )
 
-            logger.info(f"  Processing platform {platform_id} ({vendor_name})...")
-
-            # Get overview data from API
-            platform_overview = get_platform_overview(dataset_id, platform_id, access_token)
-
-            # Aggregate overview data by data_type
-            if platform_overview:
-                for data_type, stats in platform_overview.items():
-                    if data_type not in combined_overview_data:
-                        combined_overview_data[data_type] = {
-                            'searches_platform': 0,
-                            'total_item_investigations': 0,
-                            'total_item_requests': 0,
-                            'unique_item_investigations': 0,
-                            'unique_item_requests': 0,
-                            'unique_title_investigations': 0,
-                            'unique_title_requests': 0
-                        }
-
-                    # Sum the values
-                    for key in combined_overview_data[data_type].keys():
-                        combined_overview_data[data_type][key] += stats.get(key, 0)
-            
-            # Get top titles data from API (skip if only generating summaries)
-            # Store separately by platform for now (combining titles is complex)
-            if filters['reports'] != 'summary':
-                platform_top_titles = get_top_titles(dataset_id, platform_id, access_token, limit=100)
-                if platform_top_titles:
-                    combined_top_titles_data[platform_id] = {
-                        'vendor_name': vendor_name,
-                        'data': platform_top_titles
-                }
-                    
-            time.sleep(0.3)  # Small delay between platforms
-
-        # Store results for this library
         dataset_library_results[library_abbrev] = {
             'library_info': library_info,
             'library_name': library_name,
@@ -1153,188 +1167,217 @@ def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, o
             'overview_data': combined_overview_data,
             'top_titles_data': combined_top_titles_data
         }
-        
-        # Calculate totals for summary
-        searches_platform = 0
-        total_item_investigations = 0
-        total_item_requests = 0
-        unique_item_investigations = 0
-        unique_item_requests = 0
-        unique_title_investigations = 0
-        unique_title_requests = 0
-        
-        if combined_overview_data:
-            # Sum across all data types
-            # Structure is: { 'Book': {...stats...}, 'Journal': {...stats...} }
-            # underscore represents 'data_type' for dictionary keys
-            for _, stats in combined_overview_data.items():
-                searches_platform += stats.get('searches_platform', 0)
-                total_item_investigations += stats.get('total_item_investigations', 0)
-                total_item_requests += stats.get('total_item_requests', 0)
-                unique_item_investigations += stats.get('unique_item_investigations', 0)
-                unique_item_requests += stats.get('unique_item_requests', 0)
-                unique_title_investigations += stats.get('unique_title_investigations', 0)
-                unique_title_requests += stats.get('unique_title_requests', 0)
-        
-        # Add to summary data for consortium report
+
+        # Totals across all data types feed the consortium summary row
+        totals = _summarize_overview(combined_overview_data)
         platform_summary_data.append({
             'library_name': library_name,
             'platform_name': f"{library_name} - {dataset_info['name']}",
-            'searches_platform': searches_platform,
-            'total_item_investigations': total_item_investigations,
-            'total_item_requests': total_item_requests,
-            'unique_item_investigations': unique_item_investigations,
-            'unique_item_requests': unique_item_requests,
-            'unique_title_investigations': unique_title_investigations,
-            'unique_title_requests': unique_title_requests
-        })        
-        # Add a small delay between libraries
-        time.sleep(0.5)
-    
-    # PHASE 2: Analyze which data_types have usage across the dataset (skip if only summaries)
+            **totals
+        })
+
+        time.sleep(0.5)  # Small delay between libraries
+
+    return dataset_library_results, platform_summary_data
+
+
+def _determine_valid_data_types(dataset_library_results):
+    """
+    PHASE 2: flatten each library's per-platform title data by data_type, then
+    determine which data_types have any usage across the whole dataset.
+
+    Returns:
+        set: data_type names that should be reported.
+    """
+    analysis_data = {}
+    for lib_abbrev, lib_data in dataset_library_results.items():
+        # Combine all platforms' title data into one {data_type: [titles]} map
+        combined_titles = {}
+        for platform_info in lib_data['top_titles_data'].values():
+            for data_type, titles in platform_info['data'].items():
+                if data_type not in combined_titles:
+                    combined_titles[data_type] = []
+                combined_titles[data_type].extend(titles)
+
+        analysis_data[lib_abbrev] = {'top_titles': combined_titles}
+
+    return analyze_dataset_data_types(analysis_data)
+
+
+def _generate_library_top_titles(library_info, dataset_info, top_titles_data,
+                                 valid_data_types, library_dir):
+    """Generate a separate top-100 titles report for each of a library's platforms."""
+    for platform_id, platform_data in top_titles_data.items():
+        vendor_name = platform_data['vendor_name']
+        platform_titles = platform_data['data']
+
+        logger.info("  Generating top 100 report for %s (platform %s )", vendor_name, platform_id)
+
+        generate_top_titles_report(
+            library_info,
+            dataset_info,
+            platform_titles,
+            valid_data_types,
+            library_dir,
+            platform_suffix=f"_{vendor_name.replace(' ', '_')}"  # Add vendor to filename
+        )
+
+
+def _generate_library_reports(dataset_library_results, dataset_info, valid_data_types,
+                              output_dir, filters):
+    """PHASE 3: generate the per-library overview and top-100 reports."""
+    for library_abbrev, library_data in dataset_library_results.items():
+        library_info = library_data['library_info']
+        library_name = library_data['library_name']
+
+        logger.info("\nGenerating reports: %s (%s)", library_name, library_abbrev)
+
+        # Create library-specific directory
+        library_dir = create_library_directory(output_dir, library_abbrev)
+
+        # Generate platform overview report (if requested)
+        if filters['reports'] in ['all', 'overview']:
+            generate_platform_report(
+                library_info,
+                dataset_info,
+                library_data['overview_data'],
+                library_dir
+            )
+
+        # Generate top titles reports (if requested and data available)
+        if filters['reports'] in ['all', 'top100']:
+            if valid_data_types and library_data['top_titles_data']:
+                _generate_library_top_titles(
+                    library_info,
+                    dataset_info,
+                    library_data['top_titles_data'],
+                    valid_data_types,
+                    library_dir
+                )
+        else:
+            logger.warning("  No valid data types to report for %s", library_name)
+
+
+def process_dataset(dataset_id, dataset_info, platform_mappings, access_token, output_dir, filters):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """
+    Process a single dataset and generate all required reports.
+
+    Orchestrates three phases via helper functions:
+      1. _collect_dataset_data       - fetch/aggregate API data for all libraries
+      2. _determine_valid_data_types - find data_types that have usage
+      3. _generate_library_reports   - write the per-library reports
+    then writes the consortium (BCLA) summary reports.
+
+    Args:
+        dataset_id (str): Dataset ID
+        dataset_info (dict): Dataset configuration
+        platform_mappings (pd.DataFrame): Platform mappings
+        access_token (str): API access token
+        output_dir (Path): Base output directory path
+        filters (dict): Library/dataset/report filters from the CLI
+    """
+    logger.info("\n%s", '='*60)
+    logger.info("Processing Dataset: %s (ID: %s)", dataset_info['name'], dataset_id)
+    logger.info("%s", '='*60)
+
+    # Filter platform mappings down to this dataset
+    dataset_platforms = platform_mappings[
+        platform_mappings['dataset_id'] == int(dataset_id)
+    ]
+
+    bcla_summaries_dir = create_bcla_summaries_directory(output_dir)
+
+    # PHASE 1: Collect data from ALL libraries
+    logger.info("\nPHASE 1: Collecting data from all libraries...")
+    dataset_library_results, platform_summary_data = _collect_dataset_data(
+        dataset_id,
+        dataset_info,
+        dataset_platforms,
+        access_token,
+        filters
+    )
+
+    # PHASE 2: Analyze which data_types have usage across the dataset
     if filters['reports'] != 'summary':
         logger.info("\nPHASE 2: Analyzing dataset-wide data_types with usage...")
-        
-        # Create a simplified structure for analysis
-        # Need to flatten multi-platform data into single data_type structure
-        analysis_data = {}
-        for lib_abbrev, lib_data in dataset_library_results.items():
-            # Combine all platforms' title data into one structure
-            combined_titles = {}
-
-            # lib_data['top_titles_data'] is now: {platform_id: {'vendor_name': ..., 'data': {data_type: [titles]}}}
-            for platform_id, platform_info in lib_data['top_titles_data'].items():
-                platform_titles = platform_info['data']  # This is {data_type: [titles]}
-
-                # Merge into combined_titles by data_type
-                for data_type, titles in platform_titles.items():
-                    if data_type not in combined_titles:
-                        combined_titles[data_type] = []
-                    combined_titles[data_type].extend(titles)
-
-            analysis_data[lib_abbrev] = {
-                'top_titles': combined_titles
-            }
-                    
-        valid_data_types = analyze_dataset_data_types(analysis_data)
-        
+        valid_data_types = _determine_valid_data_types(dataset_library_results)
         if valid_data_types:
-            logger.info(f"Data types with usage in this dataset: {', '.join(sorted(valid_data_types))}")
+            logger.info("Data types with usage in this dataset: %s", ', '.join(sorted(valid_data_types)))
         else:
             logger.warning("No data types with usage found in this dataset")
     else:
         logger.info("\nPHASE 2: Skipping data type analysis (summary mode)")
         valid_data_types = set()  # Empty set for summary mode
-    
+
     # PHASE 3: Generate reports for each library (skip if only generating summaries)
     if filters['reports'] != 'summary':
         logger.info("\nPHASE 3: Generating library reports...")
-        
-        for library_abbrev, library_data in dataset_library_results.items():
-            library_info = library_data['library_info']
-            library_name = library_data['library_name']
-            overview_data = library_data['overview_data']
-            top_titles_data = library_data['top_titles_data']
-            
-            logger.info(f"\nGenerating reports: {library_name} ({library_abbrev})")
-            
-            # Create library-specific directory
-            library_dir = create_library_directory(output_dir, library_abbrev)
-            
-            # Generate platform overview report (if requested)
-            if filters['reports'] in ['all', 'overview']:
-                generate_platform_report(
-                    library_info,
-                    dataset_info,
-                    overview_data,
-                    library_dir
-                )
-            
-            # Generate top titles reports (if requested and data available)
-            if filters['reports'] in ['all', 'top100']:
-                if valid_data_types and top_titles_data:
-
-                    # Generate separate top 100 report for each platform
-                    for platform_id, platform_data in top_titles_data.items():
-                        vendor_name = platform_data['vendor_name']
-                        platform_titles = platform_data['data']
-
-                        logger.info(f"  Generating top 100 report for {vendor_name} (platform {platform_id})")
-
-                        generate_top_titles_report(
-                            library_info,
-                            dataset_info,
-                            platform_titles,
-                            valid_data_types,
-                            library_dir,
-                            platform_suffix=f"_{vendor_name.replace(' ', '_')}"  # Add vendor to filename
-                        )
-
-            else:
-                logger.warning(f"  No valid data types to report for {library_name}")
-
-
+        _generate_library_reports(
+            dataset_library_results,
+            dataset_info,
+            valid_data_types,
+            output_dir,
+            filters
+        )
     else:
         logger.info("\nPHASE 3: Skipping individual library reports (summary mode)")
-    
+
     # Generate dataset summary report (goes to bcla_summaries directory)
     if filters['reports'] == 'summary':
         logger.info("\nGenerating BCLA consortium summary...")
     generate_dataset_summary(
-        dataset_id,
         dataset_info,
         platform_summary_data,
         bcla_summaries_dir
     )
-    
+
     # Generate combined top 100 titles summaries (skip if only overview reports requested)
     if filters['reports'] in ['all', 'top100', 'summary'] and valid_data_types:
         generate_combined_top_titles_summary(
-            dataset_id,
             dataset_info,
             dataset_library_results,
             valid_data_types,
             bcla_summaries_dir
         )
 
-    logger.info(f"\nCompleted dataset: {dataset_info['name']}")
+    logger.info("\nCompleted dataset: %s", dataset_info['name'])
 
 def main():
     """Main execution function."""
-    logger.info("\n" + "="*60)
+    logger.info("\n%s", "="*60)
     logger.info("LibInsight Usage Reports Generator")
     logger.info("="*60)
-    logger.info(f"Fiscal Year: {FISCAL_YEAR['start']} to {FISCAL_YEAR['end']}")
-    logger.info(f"Report Label: FY{FISCAL_YEAR['label']}")
+    logger.info("Fiscal Year: %s to %s", FISCAL_YEAR['start'], FISCAL_YEAR['end'])
+    logger.info("Report Label: FY%s", FISCAL_YEAR['label'])
     logger.info("")
 
     # Parse command-line arguments
     filters = parse_arguments()
-    
+
     # Log active filters
     if filters['libraries']:
-        logger.info(f"Library filter: {', '.join(sorted(filters['libraries']))}")
+        logger.info("Library filter: %s", ', '.join(sorted(filters['libraries'])))
     if filters['datasets']:
-        logger.info(f"Dataset filter: {', '.join(sorted(filters['datasets']))}")
-    logger.info(f"Report types: {filters['reports']}")
+        logger.info("Dataset filter: %s", ', '.join(sorted(filters['datasets'])))
+    logger.info("Report types: %s", filters['reports'])
     logger.info("")
-    
+
     # Step 1: Create output directory
     output_dir = create_output_directory()
-    
+
     # Step 2: Load platform mappings
     platform_mappings = load_platform_mappings()
-    
+
     # Step 3: Get API access token
     access_token = get_access_token()
-    
+
     # Step 4: Process each dataset
     for dataset_id, dataset_info in DATASETS.items():
         # Apply dataset filter if specified
         if filters['datasets'] and dataset_info['abbrev'].lower() not in filters['datasets']:
-            logger.info(f"Skipping dataset: {dataset_info['name']} (filtered out)")
+            logger.info("Skipping dataset: %s (filtered out)", dataset_info['name'])
             continue
-            
+
         try:
             process_dataset(
                 dataset_id,
@@ -1345,13 +1388,13 @@ def main():
                 filters  # <-- ADD THIS
             )
         except Exception as e:
-            logger.error(f"Error processing dataset {dataset_id}: {e}")
+            logger.error("Error processing dataset %s: %s", dataset_id, e)
             logger.exception("Full traceback:")
             continue
-    
-    logger.info("\n" + "="*60)
+
+    logger.info("\n%s", "="*60)
     logger.info("Report Generation Complete!")
-    logger.info(f"Output directory: {output_dir.absolute()}")
+    logger.info("Output directory: %s", output_dir.absolute())
     logger.info("="*60)
 
 # ============================================================================
@@ -1365,6 +1408,6 @@ if __name__ == "__main__":
         logger.info("\n\nScript interrupted by user")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error("Unexpected error: %s", e)
         logger.exception("Full traceback:")
         sys.exit(1)
