@@ -46,7 +46,6 @@ usage_reports*/
 libinsight-platforms.csv
 libguide-boxes.csv
 README_PARSE_ERRORS.md
-create_usage_zips.py
 parse_sushi_errors.py
 sushi_fetch_errors.csv
 *.zip

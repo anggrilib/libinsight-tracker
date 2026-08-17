@@ -5,7 +5,7 @@
 # The script exits non-zero if EITHER linter reports a problem, so it can gate
 # commits / CI. All tracked modules currently pass both linters cleanly.
 
-py_files="sushi_harvest_tracker.py libinsight_usage_reports.py springshare_auth.py sushi_reharvest.py"
+py_files="sushi_harvest_tracker.py libinsight_usage_reports.py springshare_auth.py sushi_reharvest.py create_usage_zips.py upload_zip.py"
 
 echo "=== Ruff ==="
 ruff check .

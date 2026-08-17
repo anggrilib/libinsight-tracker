@@ -10,7 +10,7 @@
 # Bypass in an emergency with:
 #   git commit --no-verify
 
-py_files="sushi_harvest_tracker.py libinsight_usage_reports.py springshare_auth.py sushi_reharvest.py"
+py_files="sushi_harvest_tracker.py libinsight_usage_reports.py springshare_auth.py sushi_reharvest.py create_usage_zips.py upload_zip.py"
 
 echo "pre-commit: running Ruff (blocking)..."
 if ! ruff check .; then
