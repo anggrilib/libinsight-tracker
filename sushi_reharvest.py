@@ -228,7 +228,9 @@ def format_date_for_input(date_str):
 
     # Try MM/DD/YYYY
     try:
-        dt = datetime.strptime(date_str, "%m/%d/%Y")
+        # DTZ007: a bare calendar date has no timezone. Do not "fix" this with
+        # .astimezone() -- that can shift the date a day and corrupt the harvest range.
+        dt = datetime.strptime(date_str, "%m/%d/%Y")  # noqa: DTZ007
         return dt.strftime("%Y-%m-%d")
     except ValueError:
         print(f"  ⚠️  Unrecognised date format: '{date_str}'. Expected MM/DD/YYYY or YYYY-MM-DD.")

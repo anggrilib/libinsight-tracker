@@ -87,7 +87,7 @@ DATASETS_TO_CHECK = [
 Find this line near the top (around line 20):
 
 ```python
-AUTO_ENABLE_DISABLED_HARVESTS = False
+AUTO_ENABLE_DISABLED_HARVESTS = True
 ```
 
 **To turn ON auto-enabling:** Change `False` to `True`
@@ -282,6 +282,25 @@ Each function has comments explaining what it does. This makes it easier to:
 - Understand how each part works
 - Make small changes without breaking other parts
 - Learn Python by seeing working examples
+
+---
+
+## Linting
+
+Both linters must pass before a commit. The repo is kept Ruff-clean and at Pylint 10.00.
+
+```bash
+./lint.ps1      # Windows
+./lint.sh       # macOS / Linux / WSL
+```
+
+To run them automatically before every commit, activate the hook once per clone:
+
+```bash
+git config core.hooksPath hooks
+```
+
+Configuration lives in `ruff.toml` and `.pylintrc`. Both carry comments explaining why each rule is suppressed — read those before adding a new suppression. In an emergency you can bypass the hook with `git commit --no-verify`.
 
 ---
 

@@ -20,8 +20,6 @@ Usage:
 # relaxed for this file only (kept out of a project-wide config so the other
 # modules stay strict). These are pervasive, stylistic, or intentional choices
 # rather than per-function structure problems:
-#   - logging-fstring-interpolation / logging-not-lazy: f-strings are used in log
-#     calls for readability; the lazy-% performance win is negligible here.
 #   - broad-exception-caught: the per-dataset / per-report handlers deliberately
 #     catch any error so one failure does not abort the whole run (this matches
 #     the project's Ruff BLE001 setting).
@@ -94,7 +92,7 @@ DATASETS = {
         'abbrev': 'bloomsbury',
         'report_type': 'Title Master Report',
         # Special note: ABC-CLIO platforms are inactive as of Nov 2024
-        # Change to true for FY2425 reports only to merge ABC-CLIO stats
+        # Change to true for FY2425 reports to merge ABC-CLIO stats
         'includes_abc_clio': False
     }
 }
