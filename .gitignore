@@ -1,6 +1,7 @@
 # Environment variables
-.env
+# *.env already covers a bare .env file.
 *.env
+!sample.env
 
 # Python
 __pycache__/
@@ -13,7 +14,6 @@ __pycache__/
 .venv/
 env/
 ENV/
-test_*
 
 # IDE settings
 .vscode/
@@ -22,11 +22,13 @@ test_*
 *.swo
 
 # Output files
+# These are deliberate blanket bans on generated report formats -- they also
+# keep local files like .claude/settings.local.json out. Add a negation below
+# for any file of these types that genuinely belongs in the repo.
 *.xml
 *.txt
-!requirements.txt
+!requirements*.txt
 *.json
-barcodes.txt
 output/
 
 # OS files
@@ -40,11 +42,13 @@ Thumbs.db
 .history/
 *.yaml
 scratch*
-usage_reports/
+usage_reports*/
 libinsight-platforms.csv
+libguide-boxes.csv
 README_PARSE_ERRORS.md
 create_usage_zips.py
 parse_sushi_errors.py
 sushi_fetch_errors.csv
 *.zip
 review/
+reharvest.csv
