@@ -377,8 +377,8 @@ python upload_zip.py                # the real upload
 ```
 
 Useful flags: `--library [library_code]` to process a single library (example: `--library alc`), add a
-`--zips-dir` to point different folder, and `--boxes-csv` / `--platforms-csv` to override the default mapping
-files. Both this script and the harvest tracker need LibApps credentials and MFA; see
+`--zips-dir` to point at a different folder, and `--boxes-csv` / `--platforms-csv` to override the default
+mapping files. Both this script and the harvest tracker need LibApps credentials and MFA; see
 `sample.env` for the expected variables.
 
 ---
