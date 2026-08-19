@@ -8,6 +8,10 @@ This Python script uses Selenium to automate tracking SUSHI harvest errors in Li
 - **Optionally** auto-enable disabled harvests
 - Export everything to a CSV file
 
+The repo also holds a separate set of scripts that turn LibInsight usage data into the
+per-library zips published on the "Datasets" LibGuide -- see
+[Usage Report Zip Pipeline](#usage-report-zip-pipeline) below.
+
 ---
 
 ## Prerequisites
@@ -282,6 +286,100 @@ Each function has comments explaining what it does. This makes it easier to:
 - Understand how each part works
 - Make small changes without breaking other parts
 - Learn Python by seeing working examples
+
+---
+
+## Usage Report Zip Pipeline
+
+Separate from the harvest tracker, four scripts take LibInsight usage data all the
+way to the "Datasets" LibGuide. Run them in this order, from the repo root:
+
+| Step | Script | What it does |
+|------|--------|--------------|
+| 1 | `libinsight_usage_reports.py` | Pulls usage stats from the LibInsight API into `usage_reports/<library>/` as CSVs |
+| 2 | `create_usage_zips.py` | Zips each library folder into `usage_reports/<library>_<FY>_stats.zip` |
+| 3 | `verify_usage_zips.py` | Confirms the zips match a known-good set before anything is published |
+| 4 | `upload_zip.py` | Uploads each zip into its LibGuide box via Selenium |
+
+`usage_reports*/` and `*.zip` are both in `.gitignore`, so the data and archives stay
+local -- only these scripts are tracked.
+
+### Step 2: Creating the zips
+
+```bash
+python create_usage_zips.py
+```
+
+Every subdirectory of `usage_reports/` is treated as one library and becomes one zip,
+written alongside the folders in `usage_reports/`. Files are added in sorted order so
+repeated runs produce identical archives.
+
+**Update the fiscal year once per FY.** Near the top of `create_usage_zips.py`:
+
+```python
+FY_SHORT = 2526
+```
+
+Change it before the first run of a new year -- it drives the `_2526_stats.zip` suffix,
+and `verify_usage_zips.py` imports the same constant so the two stay in step.
+
+If a zip fails part-way through, the script deletes the partial file and continues to
+the next library. That matters because a truncated zip still looks like a finished file
+on disk and could otherwise be uploaded by mistake.
+
+### Step 3: Verifying the zips
+
+A zip can be non-empty and still be wrong -- a subdirectory silently skipped, a nested
+path flattened, a file dropped. "The file exists and isn't blank" does not catch any of
+those. This script compares every archive member by name, CRC32 checksum, and
+uncompressed size against a reference set:
+
+```bash
+python verify_usage_zips.py
+```
+
+By default it checks `usage_reports/` against `usage_reports_<FY_SHORT>/`. Use a
+different reference -- last year's archive, or a copy of the current zips saved before a
+refactor -- with the flags:
+
+```bash
+python verify_usage_zips.py --reference usage_reports_2425 --candidate usage_reports
+```
+
+**Reading the output.** Each zip lands in one of four buckets:
+
+- `byte-for-byte identical` -- same SHA-256. Nothing changed at all.
+- `same contents` -- every member matches on checksum and size, but the archive bytes
+  differ. Normally harmless: member order or timestamps changed, not the payload. The
+  script says which.
+- `contents differ` -- a member was added, removed, or changed. It names the file and
+  prints both CRCs. **This is a real problem.**
+- `unreadable` -- not a valid zip, or could not be opened.
+
+The script exits 0 when every zip matches and 1 on any failure, so it can gate a
+release or be chained ahead of the upload:
+
+```bash
+python verify_usage_zips.py && python upload_zip.py
+```
+
+Add `--strict-bytes` to also fail on `same contents`, when you want the archives to be
+bit-for-bit reproducible rather than merely equivalent.
+
+### Step 4: Uploading to the LibGuide
+
+Run discovery once to build the box map, review the CSV, then upload:
+
+```bash
+python upload_zip.py --discover     # writes libguide-boxes.csv for review
+python upload_zip.py --dry-run      # opens each dialog without submitting
+python upload_zip.py                # the real upload
+```
+
+Useful flags: `--library [library_code]` to process a single library (example: `--library alc`), add a
+`--zips-dir` to point different folder, and `--boxes-csv` / `--platforms-csv` to override the default mapping
+files. Both this script and the harvest tracker need LibApps credentials and MFA; see
+`sample.env` for the expected variables.
 
 ---
 

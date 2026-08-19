@@ -10,6 +10,7 @@ $pyFiles = @(
     "springshare_auth.py",
     "sushi_reharvest.py",
     "create_usage_zips.py",
+    "verify_usage_zips.py",
     "upload_zip.py"
 )
 
